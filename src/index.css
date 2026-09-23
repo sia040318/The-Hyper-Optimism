@@ -1,0 +1,532 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+:root {
+  --bg-primary: #07090e;
+  --bg-secondary: #0d121d;
+  --bg-panel: rgba(15, 22, 36, 0.75);
+  --bg-card: rgba(22, 32, 52, 0.65);
+  
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(0, 240, 255, 0.35);
+  
+  --accent-cyan: #00f0ff;
+  --accent-emerald: #10b981;
+  --accent-amber: #f59e0b;
+  --accent-rose: #f43f5e;
+  --accent-violet: #a855f7;
+  
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  
+  --glow-cyan: 0 0 20px rgba(0, 240, 255, 0.35);
+  --glow-emerald: 0 0 20px rgba(16, 185, 129, 0.35);
+  --glow-amber: 0 0 20px rgba(245, 158, 11, 0.35);
+  --glow-rose: 0 0 25px rgba(244, 63, 94, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-primary);
+  background-image: 
+    radial-gradient(ellipse 60% 40% at 50% -20%, rgba(0, 240, 255, 0.12), transparent),
+    radial-gradient(ellipse 40% 30% at 50% 110%, rgba(168, 85, 247, 0.08), transparent);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+  overflow-x: hidden;
+  user-select: none;
+}
+
+/* App Shell Layout */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 1720px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  gap: 12px;
+}
+
+/* Header HUD */
+.hud-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-panel);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 10px 18px;
+}
+
+.brand-section {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-badge {
+  background: linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(168, 85, 247, 0.2));
+  border: 1px solid var(--border-active);
+  color: var(--accent-cyan);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-transform: uppercase;
+}
+
+.brand-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: #fff;
+}
+
+.brand-subtitle {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.header-status-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.status-dot.active {
+  background: var(--accent-emerald);
+  box-shadow: 0 0 10px var(--accent-emerald);
+}
+
+.status-dot.pulse {
+  animation: pulse-ring 1.5s infinite;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+/* 3-Column Cockpit Layout */
+.cockpit-main {
+  display: grid;
+  grid-template-columns: 320px 1fr 340px;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Glass Panels */
+.glass-panel {
+  background: var(--bg-panel);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 8px;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Center Stage: Cockpit Mirrors & Canvas */
+.radar-stage {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 14px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Mirrors HUD */
+.mirrors-hud {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+  z-index: 10;
+}
+
+.mirror-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: all 0.25s ease;
+  position: relative;
+}
+
+.mirror-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+}
+
+.mirror-status {
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+}
+
+.mirror-hint {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+
+/* Active Mirror Alert States */
+.mirror-card.alert-active {
+  border-color: var(--accent-rose);
+  background: rgba(244, 63, 94, 0.15);
+  box-shadow: var(--glow-rose);
+  animation: mirror-flash 0.8s infinite alternate;
+}
+
+.mirror-card.alert-active .mirror-status {
+  color: var(--accent-rose);
+}
+
+/* Active Gaze Focus Highlight */
+.mirror-card.gaze-focused {
+  border-color: var(--accent-emerald) !important;
+  background: rgba(16, 185, 129, 0.2) !important;
+  box-shadow: var(--glow-emerald) !important;
+  animation: none !important;
+}
+
+.mirror-card.gaze-focused .mirror-status {
+  color: var(--accent-emerald) !important;
+}
+
+@keyframes mirror-flash {
+  from { opacity: 0.75; }
+  to { opacity: 1; }
+}
+
+/* Radar Canvas */
+.radar-canvas-wrapper {
+  flex: 1;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 0;
+}
+
+canvas.radar-canvas {
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+  background: radial-gradient(circle, rgba(0, 240, 255, 0.03) 0%, rgba(7, 9, 14, 0.9) 70%);
+  cursor: grab;
+}
+
+canvas.radar-canvas:active {
+  cursor: grabbing;
+}
+
+/* Radar Overlay Tips */
+.radar-tip-bar {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 4px 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* Form Controls & Buttons */
+.btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(0, 160, 255, 0.4));
+  border-color: var(--accent-cyan);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(0, 240, 255, 0.2);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, rgba(0, 240, 255, 0.35), rgba(0, 160, 255, 0.55));
+  box-shadow: var(--glow-cyan);
+}
+
+.btn-accent {
+  background: rgba(168, 85, 247, 0.18);
+  border-color: var(--accent-violet);
+  color: #fff;
+}
+
+.btn-accent:hover {
+  background: rgba(168, 85, 247, 0.3);
+}
+
+.btn-danger {
+  background: rgba(244, 63, 94, 0.2);
+  border-color: var(--accent-rose);
+  color: #fff;
+}
+
+/* Segmented Controls */
+.segmented-control {
+  display: flex;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 4px;
+}
+
+.segment-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+
+.segment-btn.active {
+  background: var(--bg-card);
+  color: var(--accent-cyan);
+  border: 1px solid var(--border-active);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Sliders */
+.slider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.slider-label-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+input[type="range"].slider {
+  appearance: none;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  outline: none;
+}
+
+input[type="range"].slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 8px var(--accent-cyan);
+  cursor: pointer;
+}
+
+/* Telemetry Grid */
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.telemetry-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.telemetry-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.telemetry-value {
+  font-size: 15px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-main);
+  margin-top: 2px;
+}
+
+/* Modal Backdrop & Dialog */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 5, 10, 0.82);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal-content {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-active);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), var(--glow-cyan);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 680px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Likert & Slider Survey Styling */
+.survey-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.survey-question {
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.likert-scale {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.likert-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.likert-option input[type="radio"] {
+  cursor: pointer;
+}

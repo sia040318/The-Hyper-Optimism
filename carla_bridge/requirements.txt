@@ -1,0 +1,6 @@
+# Dependencies for CARLA Autonomous Simulator Bridge
+fastapi>=0.104.0
+uvicorn>=0.23.0
+websockets>=12.0
+# Note: install the carla .whl matching your CARLA simulator version (e.g. 0.9.13 / 0.9.15)
+# pip install carla
