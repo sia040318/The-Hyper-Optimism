@@ -1,0 +1,9 @@
+Download the model: 
+curl -fL \
+  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task' \
+  -o cv_bridge/models/face_landmarker.task
+
+Run the driver monitor with gaze detection:
+.venv/bin/python cv_bridge/standalone_driver_monitor.py \
+  --camera 0 \
+  --confirmation-ms 500
