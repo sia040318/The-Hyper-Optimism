@@ -11,6 +11,8 @@ interface EvaluationModalProps {
   isOpen: boolean;
   onClose: () => void;
   audioEngine: SpatialAudioEngine;
+  isAudioActive: boolean;
+  onAudioActiveChange: (active: boolean) => void;
 }
 
 const TARGET_POOL: ProxyTarget[] = [
@@ -18,7 +20,13 @@ const TARGET_POOL: ProxyTarget[] = [
   'REAR_MIRROR', 'FRONT_WINDSHIELD', 'LEFT_MIRROR', 'RIGHT_MIRROR', 'REAR_MIRROR'
 ];
 
-export const EvaluationModal: React.FC<EvaluationModalProps> = ({ isOpen, onClose, audioEngine }) => {
+export const EvaluationModal: React.FC<EvaluationModalProps> = ({
+  isOpen,
+  onClose,
+  audioEngine,
+  isAudioActive,
+  onAudioActiveChange
+}) => {
   const [participantId, setParticipantId] = useState('P_01');
   const [condition, setCondition] = useState<StudyCondition>('3D_HRTF');
   const [state, setState] = useState<'IDLE' | 'RUNNING_TRIAL' | 'WAITING_FOR_RESPONSE' | 'FINISHED'>('IDLE');
@@ -37,6 +45,28 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({ isOpen, onClos
   const activeTargetRef = useRef<ProxyTarget | null>(null);
   const soundStartTimeRef = useRef<number>(0);
   const trialTimeoutRef = useRef<number | null>(null);
+  const initialAudioActiveRef = useRef<boolean>(false);
+
+  // Manage audio state and background alarms when modal opens/closes
+  useEffect(() => {
+    if (isOpen) {
+      initialAudioActiveRef.current = isAudioActive;
+      audioEngine.setThreatAlertsSuspended(true);
+    } else {
+      if (trialTimeoutRef.current) {
+        clearTimeout(trialTimeoutRef.current);
+        trialTimeoutRef.current = null;
+      }
+      activeTargetRef.current = null;
+      setState('IDLE');
+
+      if (!initialAudioActiveRef.current) {
+        audioEngine.stop();
+        onAudioActiveChange(false);
+      }
+      audioEngine.setThreatAlertsSuspended(false);
+    }
+  }, [isOpen]);
 
   // Keyboard handler for trial responses
   useEffect(() => {
@@ -60,8 +90,23 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({ isOpen, onClos
 
   if (!isOpen) return null;
 
+  const handleCloseModal = () => {
+    if (trialTimeoutRef.current) {
+      clearTimeout(trialTimeoutRef.current);
+      trialTimeoutRef.current = null;
+    }
+    activeTargetRef.current = null;
+    if (!initialAudioActiveRef.current) {
+      audioEngine.stop();
+      onAudioActiveChange(false);
+    }
+    audioEngine.setThreatAlertsSuspended(false);
+    onClose();
+  };
+
   const startStudy = async () => {
     await audioEngine.init();
+    audioEngine.setThreatAlertsSuspended(true);
     audioEngine.setPanningModel(condition === '3D_HRTF' ? 'HRTF' : 'equalpower');
     setTrialLogs([]);
     setTrialIndex(0);
@@ -129,6 +174,19 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({ isOpen, onClos
   };
 
   const finishStudy = (logs: TrialResult[]) => {
+    if (trialTimeoutRef.current) {
+      clearTimeout(trialTimeoutRef.current);
+      trialTimeoutRef.current = null;
+    }
+    activeTargetRef.current = null;
+
+    // Immediately ensure results screen is completely silent
+    audioEngine.setThreatAlertsSuspended(true);
+    if (!initialAudioActiveRef.current) {
+      audioEngine.stop();
+      onAudioActiveChange(false);
+    }
+
     setState('FINISHED');
 
     const total = logs.length;
@@ -158,6 +216,19 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({ isOpen, onClos
     }));
   };
 
+  const handleResetStudy = () => {
+    if (trialTimeoutRef.current) {
+      clearTimeout(trialTimeoutRef.current);
+      trialTimeoutRef.current = null;
+    }
+    activeTargetRef.current = null;
+    setState('IDLE');
+    if (!initialAudioActiveRef.current) {
+      audioEngine.stop();
+      onAudioActiveChange(false);
+    }
+  };
+
   const handleSUSSubmit = (responses: SUSResponses, score: number) => {
     setSession((prev) => ({ ...prev, susResponses: responses, susScore: score }));
     setShowSUS(false);
@@ -178,7 +249,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({ isOpen, onClos
               HCI Empirical Evaluation: 3D Audio Reaction Study
             </h2>
           </div>
-          <button className="btn" onClick={onClose} style={{ padding: 4 }}>
+          <button className="btn" onClick={handleCloseModal} style={{ padding: 4 }}>
             <X size={16} />
           </button>
         </div>
@@ -305,7 +376,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({ isOpen, onClos
           {state === 'FINISHED' && (
             <StudyResultsView
               session={session}
-              onResetStudy={() => setState('IDLE')}
+              onResetStudy={handleResetStudy}
               onOpenSUS={() => setShowSUS(true)}
               onOpenNASA={() => setShowNASA(true)}
             />

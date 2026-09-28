@@ -21,6 +21,7 @@ export class SpatialAudioEngine {
 
   // State
   private isAudioActive = false;
+  private isThreatAlertsSuspended = false;
   private pulseTimer: number | null = null;
   private currentThreat: ThreatObstacle | null = null;
   private isGazeCancelled = false;
@@ -33,7 +34,6 @@ export class SpatialAudioEngine {
       if (this.ctx.state === 'suspended') {
         await this.ctx.resume();
       }
-      this.isAudioActive = true;
       return true;
     }
 
@@ -54,9 +54,48 @@ export class SpatialAudioEngine {
     // Create main HRTF spatial panner
     this.createPannerNode();
 
+    return true;
+  }
+
+  public async start(): Promise<boolean> {
+    const initialized = await this.init();
+    if (!initialized) return false;
+
+    if (this.ctx && this.ctx.state === 'suspended') {
+      await this.ctx.resume();
+    }
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setValueAtTime(this.config.masterVolume, this.ctx.currentTime);
+    }
     this.isAudioActive = true;
     this.startPulseScheduler();
     return true;
+  }
+
+  public stop() {
+    this.isAudioActive = false;
+    this.stopPulseScheduler();
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setValueAtTime(0, this.ctx.currentTime);
+    }
+  }
+
+  public toggleAudio(): boolean {
+    if (this.isAudioActive) {
+      this.stop();
+      return false;
+    } else {
+      this.start();
+      return true;
+    }
+  }
+
+  public setThreatAlertsSuspended(suspended: boolean) {
+    this.isThreatAlertsSuspended = suspended;
+  }
+
+  public getThreatAlertsSuspended(): boolean {
+    return this.isThreatAlertsSuspended;
   }
 
   private setupListener() {
@@ -214,8 +253,20 @@ export class SpatialAudioEngine {
   }
 
   private startPulseScheduler() {
+    this.stopPulseScheduler();
+
     const loop = () => {
-      if (this.isAudioActive && this.ctx && !this.isGazeCancelled && this.currentThreat) {
+      if (!this.isAudioActive) {
+        this.pulseTimer = null;
+        return;
+      }
+
+      if (
+        this.ctx &&
+        !this.isThreatAlertsSuspended &&
+        !this.isGazeCancelled &&
+        this.currentThreat
+      ) {
         const dist = this.currentThreat.distance;
         if (dist <= 30.0) {
           this.playAlertPulse();
@@ -231,10 +282,21 @@ export class SpatialAudioEngine {
         nextDelayMs = 150 + Math.pow(ratio, 1.4) * 650;
       }
 
-      this.pulseTimer = window.setTimeout(loop, nextDelayMs);
+      if (this.isAudioActive) {
+        this.pulseTimer = window.setTimeout(loop, nextDelayMs);
+      } else {
+        this.pulseTimer = null;
+      }
     };
 
     loop();
+  }
+
+  public stopPulseScheduler() {
+    if (this.pulseTimer !== null) {
+      clearTimeout(this.pulseTimer);
+      this.pulseTimer = null;
+    }
   }
 
   public playAlertPulse() {
@@ -327,6 +389,12 @@ export class SpatialAudioEngine {
    */
   public testDirection(target: ProxyTarget) {
     if (!this.ctx) return;
+    if (this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+    if (this.masterGain) {
+      this.masterGain.gain.setValueAtTime(this.config.masterVolume, this.ctx.currentTime);
+    }
     let x = 0, y = 10, az = 0;
     switch (target) {
       case 'LEFT_MIRROR':
@@ -358,7 +426,7 @@ export class SpatialAudioEngine {
 
   public setMasterVolume(vol: number) {
     this.config.masterVolume = vol;
-    if (this.masterGain && this.ctx) {
+    if (this.masterGain && this.ctx && this.isAudioActive) {
       this.masterGain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.05);
     }
   }
@@ -376,9 +444,7 @@ export class SpatialAudioEngine {
   }
 
   public cleanup() {
-    if (this.pulseTimer) {
-      clearTimeout(this.pulseTimer);
-    }
+    this.stop();
     if (this.ctx && this.ctx.state !== 'closed') {
       this.ctx.close();
     }

@@ -180,9 +180,14 @@ export const App: React.FC = () => {
 
   // Audio Toggle
   const handleToggleAudio = async () => {
-    const success = await audioEngine.init();
-    if (success) {
-      setIsAudioActive(audioEngine.getIsActive());
+    if (isAudioActive) {
+      audioEngine.stop();
+      setIsAudioActive(false);
+    } else {
+      const success = await audioEngine.start();
+      if (success) {
+        setIsAudioActive(true);
+      }
     }
   };
 
@@ -203,7 +208,7 @@ export const App: React.FC = () => {
 
   const handleTestDirection = (target: ProxyTarget) => {
     if (!isAudioActive) {
-      audioEngine.init().then(() => {
+      audioEngine.start().then(() => {
         setIsAudioActive(true);
         audioEngine.testDirection(target);
       });
@@ -231,6 +236,8 @@ export const App: React.FC = () => {
         {/* Column 1: Audio Engine & Traffic Scenarios */}
         <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <AudioControlPanel
+            isAudioActive={isAudioActive}
+            onToggleAudio={handleToggleAudio}
             volume={volume}
             onVolumeChange={handleVolumeChange}
             panningModel={panningModel}
@@ -282,6 +289,8 @@ export const App: React.FC = () => {
         isOpen={isStudyModalOpen}
         onClose={() => setIsStudyModalOpen(false)}
         audioEngine={audioEngine}
+        isAudioActive={isAudioActive}
+        onAudioActiveChange={setIsAudioActive}
       />
     </div>
   );

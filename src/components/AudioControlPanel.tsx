@@ -4,6 +4,8 @@ import { ProxyTarget } from '../types/threats';
 import { Headphones, Sliders } from 'lucide-react';
 
 interface AudioControlPanelProps {
+  isAudioActive: boolean;
+  onToggleAudio: () => void;
   volume: number;
   onVolumeChange: (vol: number) => void;
   panningModel: PanningModel;
@@ -14,6 +16,8 @@ interface AudioControlPanelProps {
 }
 
 export const AudioControlPanel: React.FC<AudioControlPanelProps> = ({
+  isAudioActive,
+  onToggleAudio,
   volume,
   onVolumeChange,
   panningModel,
@@ -29,6 +33,58 @@ export const AudioControlPanel: React.FC<AudioControlPanelProps> = ({
           <Headphones size={15} color="var(--accent-cyan)" />
           HRTF Audio Engine
         </h2>
+      </div>
+
+      {/* Sound On / Off Toggle Slider Switch */}
+      <div className="slider-group" style={{ paddingBottom: 6, borderBottom: '1px solid var(--border-subtle)' }}>
+        <div className="slider-label-row" style={{ alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>Audio Output</span>
+            <span style={{ 
+              fontSize: 10, 
+              padding: '2px 6px', 
+              borderRadius: 4, 
+              background: isAudioActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.06)',
+              color: isAudioActive ? 'var(--accent-emerald)' : 'var(--text-dim)',
+              fontFamily: 'var(--font-mono)'
+            }}>
+              {isAudioActive ? 'ACTIVE' : 'MUTED'}
+            </span>
+          </div>
+
+          <button
+            onClick={onToggleAudio}
+            type="button"
+            className={`audio-toggle-switch ${isAudioActive ? 'active' : ''}`}
+            aria-label="Toggle Sound"
+            title={isAudioActive ? "Click to Turn Sound Off" : "Click to Turn Sound On"}
+            style={{
+              width: 44,
+              height: 24,
+              borderRadius: 12,
+              background: isAudioActive ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.15)',
+              border: '1px solid ' + (isAudioActive ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.2)'),
+              position: 'relative',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              padding: 2,
+              display: 'flex',
+              alignItems: 'center'
+            }}
+          >
+            <div
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: '50%',
+                background: '#ffffff',
+                boxShadow: '0 2px 4px rgba(0, 0, 0, 0.4)',
+                transform: isAudioActive ? 'translateX(20px)' : 'translateX(0px)',
+                transition: 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+              }}
+            />
+          </button>
+        </div>
       </div>
 
       {/* Volume Slider */}

@@ -33,10 +33,15 @@ export const HeaderHUD: React.FC<HeaderHUDProps> = ({
         <button 
           onClick={onToggleAudio} 
           className={`status-pill ${isAudioActive ? 'active' : ''}`}
-          style={{ cursor: 'pointer', background: isAudioActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(0,0,0,0.5)' }}
+          style={{ 
+            cursor: 'pointer', 
+            background: isAudioActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+            borderColor: isAudioActive ? 'rgba(16, 185, 129, 0.4)' : 'rgba(255, 255, 255, 0.12)'
+          }}
+          title={isAudioActive ? "Click to Turn Sound Off" : "Click to Turn Sound On"}
         >
-          {isAudioActive ? <Volume2 size={14} color="var(--accent-emerald)" /> : <VolumeX size={14} color="var(--accent-amber)" />}
-          <span>{isAudioActive ? 'Audio: 3D Active' : 'Start Audio Engine'}</span>
+          {isAudioActive ? <Volume2 size={14} color="var(--accent-emerald)" /> : <VolumeX size={14} color="var(--text-muted)" />}
+          <span>{isAudioActive ? 'Audio: 3D Active' : 'Audio: Off'}</span>
         </button>
 
         {/* CV Bridge / Simulation Mode Status */}
