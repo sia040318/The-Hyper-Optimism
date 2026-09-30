@@ -6,6 +6,7 @@ import { AudioControlPanel } from './components/AudioControlPanel';
 import { ScenarioPanel } from './components/ScenarioPanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
 import { EvaluationModal } from './components/evaluation/EvaluationModal';
+import { GameWindow, GameWindowHandle, MirrorSide } from './game';
 
 import { SpatialAudioEngine } from './audio/SpatialAudioEngine';
 import { CVBridgeService } from './services/CVBridgeService';
@@ -36,6 +37,7 @@ export const App: React.FC = () => {
   const [panningModel, setPanningModel] = useState<PanningModel>('HRTF');
   const [soundType, setSoundType] = useState<SoundType>('chime');
   const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
+  const gameWindowRef = React.useRef<GameWindowHandle>(null);
 
   // Primary threat is first threat in list
   const primaryThreat = threats[0] || null;
@@ -257,6 +259,12 @@ export const App: React.FC = () => {
 
         {/* Column 2: Center Cockpit Stage (Cabin Mirrors + Radar) */}
         <section className="radar-stage">
+          <div style={{ height: '400px', width: '100%', marginBottom: '16px', borderRadius: '8px', overflow: 'hidden' }}>
+            <GameWindow 
+              ref={gameWindowRef}
+              onTrafficEvent={(e) => console.log('Traffic Event:', e)} 
+            />
+          </div>
           <CockpitHUD
             currentGaze={currentGaze}
             activeTarget={primaryThreat ? primaryThreat.proxyTarget : null}
