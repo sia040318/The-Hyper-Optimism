@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { HeaderHUD } from './components/HeaderHUD';
 import { CockpitHUD } from './components/CockpitHUD';
 import { RadarCanvas } from './components/RadarCanvas';
@@ -12,6 +12,7 @@ import { SpatialAudioEngine } from './audio/SpatialAudioEngine';
 import { CVBridgeService } from './services/CVBridgeService';
 import { CarlaBridgeService } from './services/CarlaBridgeService';
 import { inBrowserVision } from './services/InBrowserVisionService';
+import { GameWindow, GameWindowHandle, TrafficEvent } from './game';
 
 import { ThreatObstacle, ScenarioType, ProxyTarget } from './types/threats';
 import { GazeZone, HeadPose, InputMode } from './types/gaze';
@@ -39,6 +40,8 @@ export const App: React.FC = () => {
   const [panningModel, setPanningModel] = useState<PanningModel>('HRTF');
   const [soundType, setSoundType] = useState<SoundType>('chime');
   const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
+  const [stageView, setStageView] = useState<'3D_GAME' | '2D_RADAR' | 'SPLIT'>('3D_GAME');
+  const gameWindowRef = useRef<GameWindowHandle>(null);
 
   // Primary threat is first threat in list
   const primaryThreat = threats[0] || null;
@@ -110,6 +113,33 @@ export const App: React.FC = () => {
   useEffect(() => {
     audioEngine.setThreat(primaryThreat);
   }, [primaryThreat, audioEngine]);
+
+  // Traffic Event Handler from Three.js Game Engine
+  const handleTrafficEvent = (event: TrafficEvent) => {
+    const target: ProxyTarget = event.side === 'left' ? 'LEFT_MIRROR' : 'RIGHT_MIRROR';
+    console.log(`[Three.js Game] Traffic alert: ${event.type} on ${event.side} side.`);
+
+    // If audio is active, trigger directional alert
+    if (isAudioActive) {
+      audioEngine.testDirection(target);
+    }
+
+    // Reflect threat in HUD radar
+    const threatX = event.side === 'left' ? -3.8 : 3.8;
+    const threatY = event.type === 'blind_spot' ? -1.0 : -6.0;
+    setThreats([createThreat(`car_${event.vehicleId}`, 'car', threatX, threatY, 0, 14, true)]);
+  };
+
+  // Synchronize gaze with game window mirror check acknowledgment
+  useEffect(() => {
+    if (currentGaze === 'LEFT_MIRROR') {
+      gameWindowRef.current?.notifyMirrorCheck('left');
+    } else if (currentGaze === 'RIGHT_MIRROR') {
+      gameWindowRef.current?.notifyMirrorCheck('right');
+    } else if (currentGaze === 'REAR_MIRROR') {
+      gameWindowRef.current?.notifyMirrorCheck('rear');
+    }
+  }, [currentGaze]);
 
   // Global Keyboard Shortcuts for simulation
   useEffect(() => {
@@ -285,19 +315,93 @@ export const App: React.FC = () => {
           </div>
         </aside>
 
-        {/* Column 2: Center Cockpit Stage (Cabin Mirrors + Radar) */}
-        <section className="radar-stage">
+        {/* Column 2: Center Cockpit Stage (Cabin Mirrors + Radar / 3D Game) */}
+        <section className="radar-stage" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Stage View Switcher */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255, 255, 255, 0.04)', padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+              COCKPIT VISUALIZATION
+            </span>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                className={`btn ${stageView === '3D_GAME' ? 'btn-primary' : ''}`}
+                onClick={() => setStageView('3D_GAME')}
+                style={{ fontSize: '11px', padding: '4px 10px' }}
+              >
+                🎮 3D Driving Game (Three.js)
+              </button>
+              <button
+                className={`btn ${stageView === 'SPLIT' ? 'btn-primary' : ''}`}
+                onClick={() => setStageView('SPLIT')}
+                style={{ fontSize: '11px', padding: '4px 10px' }}
+              >
+                ⚡ Split View
+              </button>
+              <button
+                className={`btn ${stageView === '2D_RADAR' ? 'btn-primary' : ''}`}
+                onClick={() => setStageView('2D_RADAR')}
+                style={{ fontSize: '11px', padding: '4px 10px' }}
+              >
+                📡 2D Radar
+              </button>
+            </div>
+          </div>
+
+          {/* 3D Game Window */}
+          {(stageView === '3D_GAME' || stageView === 'SPLIT') && (
+            <div
+              style={{
+                height: stageView === 'SPLIT' ? '300px' : '420px',
+                width: '100%',
+                borderRadius: '8px',
+                overflow: 'hidden',
+                position: 'relative',
+                border: '1px solid rgba(0, 240, 255, 0.3)',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)'
+              }}
+            >
+              <GameWindow
+                ref={gameWindowRef}
+                onTrafficEvent={handleTrafficEvent}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '8px',
+                  left: '8px',
+                  background: 'rgba(0, 0, 0, 0.65)',
+                  backdropFilter: 'blur(4px)',
+                  padding: '3px 8px',
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  color: '#38bdf8',
+                  fontWeight: 600,
+                  pointerEvents: 'none'
+                }}
+              >
+                ● THREE.JS HIGHWAY SIMULATOR (Mirrors Active)
+              </div>
+            </div>
+          )}
+
           <CockpitHUD
             currentGaze={currentGaze}
             activeTarget={primaryThreat ? primaryThreat.proxyTarget : null}
             isSilenced={isSilenced}
-            onSelectGaze={(zone) => cvBridge.simulateGaze(zone)}
+            onSelectGaze={(zone) => {
+              if (!inBrowserVision.getIsRunning()) {
+                cvBridge.simulateGaze(zone);
+              }
+            }}
           />
 
-          <RadarCanvas
-            threats={threats}
-            onThreatMoved={handleThreatMoved}
-          />
+          {/* 2D Tactical Radar */}
+          {(stageView === '2D_RADAR' || stageView === 'SPLIT') && (
+            <RadarCanvas
+              threats={threats}
+              onThreatMoved={handleThreatMoved}
+            />
+          )}
         </section>
 
         {/* Column 3: Telemetry, Gaze, and In-Browser Vision */}
