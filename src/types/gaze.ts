@@ -6,6 +6,19 @@ export interface HeadPose {
   roll: number;  // head tilt
 }
 
+export type InputMode = 'SIMULATION' | 'CV_WEBSOCKET' | 'IN_BROWSER_WEBCAM';
+
+export interface InBrowserVisionDiagnostics {
+  fps: number;
+  latencyMs: number;
+  irisRatio: number | null;
+  candidateZone: GazeZone;
+  confirmedZone: GazeZone | null;
+  dwellProgress: number; // 0.0 to 1.0 (towards confirmation threshold)
+  isConfirmed: boolean;
+  landmarksDetected: boolean;
+}
+
 export interface GazeUpdateMessage {
   type: 'GAZE_UPDATE';
   timestamp: number;
@@ -14,9 +27,9 @@ export interface GazeUpdateMessage {
   head_pose: HeadPose;
   dwell_time_ms: number;
   face_detected: boolean;
+  iris_ratio?: number | null;
+  diagnostics?: InBrowserVisionDiagnostics;
 }
-
-export type InputMode = 'SIMULATION' | 'CV_WEBSOCKET';
 
 export interface DriverState {
   currentZone: GazeZone;
@@ -25,4 +38,7 @@ export interface DriverState {
   isCvConnected: boolean;
   confidence: number;
   headPose: HeadPose;
+  irisRatio?: number | null;
+  diagnostics?: InBrowserVisionDiagnostics;
 }
+

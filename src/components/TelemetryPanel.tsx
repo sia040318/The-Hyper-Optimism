@@ -11,6 +11,7 @@ interface TelemetryPanelProps {
   headPose: HeadPose;
   inputMode: InputMode;
   isCvConnected: boolean;
+  irisRatio?: number | null;
   onSimulateGaze: (zone: GazeZone) => void;
 }
 
@@ -21,6 +22,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
   headPose,
   inputMode,
   isCvConnected,
+  irisRatio,
   onSimulateGaze
 }) => {
   const urgency = primaryThreat ? calculateUrgency(primaryThreat.distance) : 'SAFE';
@@ -79,8 +81,20 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           <Eye size={14} color="var(--accent-violet)" />
           Driver Monitoring Telemetry
         </h2>
-        <span style={{ fontSize: 10, color: isCvConnected && inputMode === 'CV_WEBSOCKET' ? 'var(--accent-emerald)' : 'var(--accent-cyan)' }}>
-          {isCvConnected && inputMode === 'CV_WEBSOCKET' ? '● Live MediaPipe' : 'Keyboard Simulation'}
+        <span
+          style={{
+            fontSize: 10,
+            color:
+              inputMode === 'IN_BROWSER_WEBCAM' || (isCvConnected && inputMode === 'CV_WEBSOCKET')
+                ? 'var(--accent-emerald)'
+                : 'var(--accent-cyan)'
+          }}
+        >
+          {inputMode === 'IN_BROWSER_WEBCAM'
+            ? '● In-Browser MediaPipe'
+            : isCvConnected && inputMode === 'CV_WEBSOCKET'
+            ? '● Python WS Stream'
+            : 'Keyboard Simulation'}
         </span>
       </div>
 
@@ -113,6 +127,14 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
             {headPose.pitch.toFixed(1)}°
           </div>
         </div>
+        {irisRatio !== undefined && irisRatio !== null && (
+          <div className="telemetry-item" style={{ gridColumn: 'span 2' }}>
+            <div className="telemetry-label">Iris Gaze Ratio (L 0.0 ← 0.5 → 1.0 R)</div>
+            <div className="telemetry-value" style={{ fontSize: 13, color: 'var(--accent-emerald)' }}>
+              {irisRatio.toFixed(2)}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Simulation Trigger Buttons */}

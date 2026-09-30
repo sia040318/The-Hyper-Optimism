@@ -44,13 +44,17 @@ export const HeaderHUD: React.FC<HeaderHUDProps> = ({
           <span>{isAudioActive ? 'Audio: 3D Active' : 'Audio: Off'}</span>
         </button>
 
-        {/* CV Bridge / Simulation Mode Status */}
+        {/* CV Bridge / In-Browser Camera Status */}
         <div className="status-pill">
-          <Eye size={14} color={isCvConnected ? "var(--accent-emerald)" : "var(--accent-cyan)"} />
+          <Eye size={14} color={cvMode === 'IN_BROWSER_WEBCAM' || isCvConnected ? "var(--accent-emerald)" : "var(--accent-cyan)"} />
           <span>
-            {cvMode === 'CV_WEBSOCKET' && isCvConnected ? 'CV Stream: Live MediaPipe' : 'Gaze: Simulation (Keys A/S/D)'}
+            {cvMode === 'IN_BROWSER_WEBCAM'
+              ? 'Vision: In-Browser Webcam (Active)'
+              : cvMode === 'CV_WEBSOCKET' && isCvConnected
+              ? 'CV Stream: Live MediaPipe (WS)'
+              : 'Gaze: Simulation (Keys A/S/D)'}
           </span>
-          <span className={`status-dot ${isCvConnected ? 'active pulse' : ''}`} />
+          <span className={`status-dot ${cvMode === 'IN_BROWSER_WEBCAM' || isCvConnected ? 'active pulse' : ''}`} />
         </div>
 
         {/* CARLA Simulator Bridge Status */}

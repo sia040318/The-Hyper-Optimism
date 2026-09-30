@@ -5,11 +5,13 @@ import { RadarCanvas } from './components/RadarCanvas';
 import { AudioControlPanel } from './components/AudioControlPanel';
 import { ScenarioPanel } from './components/ScenarioPanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
+import { DriverCameraPIP } from './components/DriverCameraPIP';
 import { EvaluationModal } from './components/evaluation/EvaluationModal';
 
 import { SpatialAudioEngine } from './audio/SpatialAudioEngine';
 import { CVBridgeService } from './services/CVBridgeService';
 import { CarlaBridgeService } from './services/CarlaBridgeService';
+import { inBrowserVision } from './services/InBrowserVisionService';
 
 import { ThreatObstacle, ScenarioType, ProxyTarget } from './types/threats';
 import { GazeZone, HeadPose, InputMode } from './types/gaze';
@@ -30,6 +32,7 @@ export const App: React.FC = () => {
   const [dwellTimeMs, setDwellTimeMs] = useState(0);
   const [headPose, setHeadPose] = useState<HeadPose>({ pitch: 0, yaw: 0, roll: 0 });
   const [inputMode, setInputMode] = useState<InputMode>('SIMULATION');
+  const [irisRatio, setIrisRatio] = useState<number | null>(null);
   const [isCvConnected, setIsCvConnected] = useState(false);
   const [isCarlaConnected, setIsCarlaConnected] = useState(false);
   const [volume, setVolume] = useState(0.8);
@@ -45,12 +48,28 @@ export const App: React.FC = () => {
     cvBridge.start();
     carlaBridge.start();
 
+    // Subscribe to In-Browser MediaPipe Vision Tracker
+    const unsubscribeInBrowser = inBrowserVision.subscribe((msg) => {
+      setCurrentGaze(msg.gaze_zone);
+      setDwellTimeMs(msg.dwell_time_ms);
+      setHeadPose(msg.head_pose);
+      setInputMode('IN_BROWSER_WEBCAM');
+      setIrisRatio(msg.iris_ratio ?? null);
+
+      audioEngine.updateHeadOrientation(msg.head_pose);
+      audioEngine.setGazeZone(msg.gaze_zone);
+    });
+
+    // Subscribe to external Python CV WebSocket (fallback)
     const unsubscribeCv = cvBridge.subscribe((msg, mode) => {
+      if (inBrowserVision.getIsRunning()) return;
+
       setCurrentGaze(msg.gaze_zone);
       setDwellTimeMs(msg.dwell_time_ms);
       setHeadPose(msg.head_pose);
       setInputMode(mode);
       setIsCvConnected(cvBridge.getIsConnected());
+      setIrisRatio(null);
 
       // Update audio engine listener orientation
       audioEngine.updateHeadOrientation(msg.head_pose);
@@ -68,13 +87,24 @@ export const App: React.FC = () => {
     });
 
     return () => {
+      unsubscribeInBrowser();
       unsubscribeCv();
       unsubscribeCarla();
       cvBridge.cleanup();
       carlaBridge.cleanup();
+      inBrowserVision.stop();
       audioEngine.cleanup();
     };
   }, [cvBridge, carlaBridge, audioEngine]);
+
+  const handleCameraActiveChange = (active: boolean) => {
+    if (!active) {
+      setInputMode(cvBridge.getMode());
+      setIrisRatio(null);
+    } else {
+      setInputMode('IN_BROWSER_WEBCAM');
+    }
+  };
 
   // Update audio engine when primary threat changes
   useEffect(() => {
@@ -270,8 +300,16 @@ export const App: React.FC = () => {
           />
         </section>
 
-        {/* Column 3: Telemetry, Gaze, and HCI Suite */}
+        {/* Column 3: Telemetry, Gaze, and In-Browser Vision */}
         <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <DriverCameraPIP
+            currentGaze={currentGaze}
+            headPose={headPose}
+            activeThreatTarget={primaryThreat ? primaryThreat.proxyTarget : null}
+            isSilenced={isSilenced}
+            onCameraActiveChange={handleCameraActiveChange}
+          />
+
           <TelemetryPanel
             primaryThreat={primaryThreat}
             currentGaze={currentGaze}
@@ -279,7 +317,12 @@ export const App: React.FC = () => {
             headPose={headPose}
             inputMode={inputMode}
             isCvConnected={isCvConnected}
-            onSimulateGaze={(zone) => cvBridge.simulateGaze(zone)}
+            irisRatio={irisRatio}
+            onSimulateGaze={(zone) => {
+              if (!inBrowserVision.getIsRunning()) {
+                cvBridge.simulateGaze(zone);
+              }
+            }}
           />
         </aside>
       </main>
