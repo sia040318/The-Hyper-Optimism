@@ -41,6 +41,7 @@ export const App: React.FC = () => {
   const [soundType, setSoundType] = useState<SoundType>('chime');
   const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
   const [stageView, setStageView] = useState<'3D_GAME' | '2D_RADAR' | 'SPLIT'>('3D_GAME');
+  const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const gameWindowRef = useRef<GameWindowHandle>(null);
 
   // Primary threat is first threat in list
@@ -140,6 +141,11 @@ export const App: React.FC = () => {
       gameWindowRef.current?.notifyMirrorCheck('rear');
     }
   }, [currentGaze]);
+
+  // Synchronize driver head pose with 3D cockpit camera
+  useEffect(() => {
+    gameWindowRef.current?.updateDriverHeadPose(headPose.yaw, headPose.pitch);
+  }, [headPose]);
 
   // Global Keyboard Shortcuts for simulation
   useEffect(() => {
@@ -289,6 +295,7 @@ export const App: React.FC = () => {
         isCvConnected={isCvConnected}
         isCarlaConnected={isCarlaConnected}
         onOpenStudy={() => setIsStudyModalOpen(true)}
+        onLaunchGame={() => setIsGameFullscreen(true)}
       />
 
       {/* 3-Column Cockpit Workspace */}
@@ -363,6 +370,8 @@ export const App: React.FC = () => {
               <GameWindow
                 ref={gameWindowRef}
                 onTrafficEvent={handleTrafficEvent}
+                driverGaze={currentGaze}
+                onToggleFullscreen={() => setIsGameFullscreen(true)}
               />
               <div
                 style={{
@@ -439,6 +448,81 @@ export const App: React.FC = () => {
         isAudioActive={isAudioActive}
         onAudioActiveChange={setIsAudioActive}
       />
+
+      {/* Fullscreen Immersive Driver Game Mode */}
+      {isGameFullscreen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: '#090d16',
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+        >
+          {/* Top Floating Control Bar */}
+          <div
+            style={{
+              position: 'absolute',
+              top: '12px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 30,
+              background: 'rgba(9, 13, 22, 0.88)',
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(0, 240, 255, 0.3)',
+              borderRadius: '24px',
+              padding: '6px 18px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '16px',
+              boxShadow: '0 8px 30px rgba(0,0,0,0.7)'
+            }}
+          >
+            <span style={{ fontSize: '11px', fontWeight: 800, color: '#00f0ff', letterSpacing: '0.05em' }}>
+              ● 3D DRIVER CABIN
+            </span>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', color: isAudioActive ? '#10b981' : 'var(--text-dim)', fontWeight: 600 }}>
+                {isAudioActive ? '🔊 3D Spatial Audio Active' : '🔇 Audio Off'}
+              </span>
+              {!isAudioActive && (
+                <button
+                  onClick={handleToggleAudio}
+                  className="btn btn-primary"
+                  style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '12px' }}
+                >
+                  Turn Audio On
+                </button>
+              )}
+            </div>
+
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              Eye Gaze: <strong style={{ color: currentGaze !== 'CENTER' ? '#10b981' : '#fff' }}>{currentGaze}</strong>
+            </span>
+
+            <button
+              onClick={() => setIsGameFullscreen(false)}
+              className="btn btn-secondary"
+              style={{ fontSize: '11px', padding: '4px 12px', borderRadius: '14px', background: 'rgba(255,255,255,0.1)' }}
+            >
+              Exit Game Mode (Esc)
+            </button>
+          </div>
+
+          <div style={{ flex: 1, width: '100%', height: '100%' }}>
+            <GameWindow
+              ref={gameWindowRef}
+              onTrafficEvent={handleTrafficEvent}
+              driverGaze={currentGaze}
+              isFullscreenMode={true}
+              onToggleFullscreen={() => setIsGameFullscreen(false)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

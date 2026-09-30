@@ -1,4 +1,4 @@
-import { Volume2, VolumeX, Eye, Radio, Activity } from 'lucide-react';
+import { Volume2, VolumeX, Eye, Radio, Activity, Gamepad2 } from 'lucide-react';
 import { InputMode } from '../types/gaze';
 
 interface HeaderHUDProps {
@@ -8,6 +8,7 @@ interface HeaderHUDProps {
   isCvConnected: boolean;
   isCarlaConnected: boolean;
   onOpenStudy: () => void;
+  onLaunchGame: () => void;
 }
 
 export const HeaderHUD: React.FC<HeaderHUDProps> = ({
@@ -16,7 +17,8 @@ export const HeaderHUD: React.FC<HeaderHUDProps> = ({
   cvMode,
   isCvConnected,
   isCarlaConnected,
-  onOpenStudy
+  onOpenStudy,
+  onLaunchGame
 }) => {
   return (
     <header className="hud-header">
@@ -63,6 +65,27 @@ export const HeaderHUD: React.FC<HeaderHUDProps> = ({
           <span>{isCarlaConnected ? 'CARLA: Linked' : 'CARLA: Standalone'}</span>
           <span className={`status-dot ${isCarlaConnected ? 'active' : ''}`} />
         </div>
+
+        {/* Launch Fullscreen Driver Game Mode Button */}
+        <button
+          onClick={onLaunchGame}
+          className="btn"
+          style={{
+            background: 'linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(99, 102, 241, 0.25))',
+            borderColor: 'rgba(0, 240, 255, 0.5)',
+            color: '#fff',
+            fontWeight: 700,
+            padding: '6px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            boxShadow: '0 0 15px rgba(0, 240, 255, 0.25)'
+          }}
+          title="Play the 3D Driving Simulator in Fullscreen"
+        >
+          <Gamepad2 size={16} color="#00f0ff" />
+          <span>Play 3D Game</span>
+        </button>
 
         {/* HCI Evaluation Study Modal Button */}
         <button onClick={onOpenStudy} className="btn btn-primary" style={{ padding: '6px 14px' }}>
