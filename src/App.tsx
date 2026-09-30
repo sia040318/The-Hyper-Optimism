@@ -6,7 +6,7 @@ import { AudioControlPanel } from './components/AudioControlPanel';
 import { ScenarioPanel } from './components/ScenarioPanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
 import { EvaluationModal } from './components/evaluation/EvaluationModal';
-import { GameWindow, GameWindowHandle, MirrorSide } from './game';
+import { GameWindow, GameWindowHandle } from './game';
 
 import { SpatialAudioEngine } from './audio/SpatialAudioEngine';
 import { CVBridgeService } from './services/CVBridgeService';

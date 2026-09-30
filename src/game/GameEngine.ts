@@ -31,7 +31,6 @@ export class GameEngine {
   private rearMirrorCamera: THREE.PerspectiveCamera;
 
   private isRunning: boolean = false;
-  private lastTime: number = 0;
   private animationFrameId: number = 0;
   private clock: THREE.Clock;
 
@@ -44,6 +43,13 @@ export class GameEngine {
   private mirrorWidthRatio = 0.26;
   private mirrorHeightRatio = 0.26;
   private timeSinceLastSpawn: number = 0;
+
+  private currentX = 0;
+  private targetX = 0;
+  private keys: Record<string, boolean> = {};
+  private mouseSteerInput = 0;
+  private controlsEnabled = true;
+  private playerGroup!: THREE.Group;
 
   constructor(options?: GameEngineOptions) {
     this.onTrafficEvent = options?.onTrafficEvent;
@@ -89,6 +95,49 @@ export class GameEngine {
 
     this.handleResize = this.handleResize.bind(this);
     window.addEventListener('resize', this.handleResize);
+    window.addEventListener('keydown', this.handleKeyDown);
+    window.addEventListener('keyup', this.handleKeyUp);
+  }
+
+  private handleKeyDown = (e: KeyboardEvent) => {
+    if (!this.controlsEnabled) return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    this.keys[e.key.toLowerCase()] = true;
+  }
+
+  private handleKeyUp = (e: KeyboardEvent) => {
+    if (!this.controlsEnabled) return;
+    this.keys[e.key.toLowerCase()] = false;
+  }
+
+  private handleMouseMove = (e: MouseEvent) => {
+    if (!this.controlsEnabled || !this.container) return;
+    this.updatePointerSteer(e.clientX);
+  }
+
+  private handleTouchMove = (e: TouchEvent) => {
+    if (!this.controlsEnabled || !this.container || e.touches.length === 0) return;
+    this.updatePointerSteer(e.touches[0].clientX);
+  }
+
+  private updatePointerSteer(clientX: number) {
+    if (!this.container) return;
+    const rect = this.container.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    let offset = (clientX - centerX) / (rect.width / 2);
+    
+    if (Math.abs(offset) < 0.05) offset = 0;
+    else offset = Math.sign(offset) * (Math.abs(offset) - 0.05) / 0.95;
+    
+    this.mouseSteerInput = offset * 4;
+  }
+
+  public setControlsEnabled(enabled: boolean) {
+    this.controlsEnabled = enabled;
+    if (!enabled) {
+      this.keys = {};
+      this.mouseSteerInput = 0;
+    }
   }
 
   private createEnvironment(): THREE.Group {
@@ -125,19 +174,21 @@ export class GameEngine {
   }
 
   private createPlayerCar() {
+    this.playerGroup = new THREE.Group();
+
     // Dashboard
     const dashGeo = new THREE.BoxGeometry(2, 0.5, 1);
     const dashMat = new THREE.MeshLambertMaterial({ color: 0x444444 });
     const dash = new THREE.Mesh(dashGeo, dashMat);
     dash.position.set(0, 0.6, -1.0);
-    this.scene.add(dash);
+    this.playerGroup.add(dash);
 
     // Hood
     const hoodGeo = new THREE.BoxGeometry(2, 0.1, 2);
     const hoodMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
     const hood = new THREE.Mesh(hoodGeo, hoodMat);
     hood.position.set(0, 0.4, -2.5);
-    this.scene.add(hood);
+    this.playerGroup.add(hood);
 
     // Steering wheel group
     const wheelGroup = new THREE.Group();
@@ -169,7 +220,8 @@ export class GameEngine {
     wheelGroup.position.set(0, 0.65, -0.65); // Centered, low
     wheelGroup.rotation.x = -Math.PI * (65 / 180); // Tilt back towards driver
     
-    this.scene.add(wheelGroup);
+    this.playerGroup.add(wheelGroup);
+    this.scene.add(this.playerGroup);
   }
 
   private createTrafficCar(lane: number, initialZ: number): THREE.Group {
@@ -234,11 +286,21 @@ export class GameEngine {
     this.container = element;
     this.container.appendChild(this.renderer.domElement);
     this.handleResize();
+    this.container.addEventListener('mousemove', this.handleMouseMove);
+    this.container.addEventListener('touchmove', this.handleTouchMove, { passive: true });
   }
 
   public unmount() {
-    if (this.container && this.renderer.domElement.parentNode === this.container) {
-      this.container.removeChild(this.renderer.domElement);
+    window.removeEventListener('keydown', this.handleKeyDown);
+    window.removeEventListener('keyup', this.handleKeyUp);
+    window.removeEventListener('resize', this.handleResize);
+
+    if (this.container) {
+      this.container.removeEventListener('mousemove', this.handleMouseMove);
+      this.container.removeEventListener('touchmove', this.handleTouchMove);
+      if (this.renderer.domElement.parentNode === this.container) {
+        this.container.removeChild(this.renderer.domElement);
+      }
     }
   }
 
@@ -279,8 +341,6 @@ export class GameEngine {
     // Left mirror: left edge, vertically centered
     // Right mirror: right edge, vertically centered
     // Rear mirror: top center
-    
-    const aspect = this.mirrorWidthRatio / this.mirrorHeightRatio;
     
     return {
       left: { x: 0, y: 0.4, width: this.mirrorWidthRatio, height: this.mirrorHeightRatio },
@@ -365,11 +425,35 @@ export class GameEngine {
     
     this.animationFrameId = requestAnimationFrame(this.loop);
     
-    const delta = this.clock.getDelta();
+    const delta = Math.min(this.clock.getDelta(), 0.05);
+
+    if (this.controlsEnabled) {
+      if (this.keys['j']) this.targetX = -4;
+      else if (this.keys['l']) this.targetX = 4;
+      else if (Math.abs(this.mouseSteerInput) > 0) this.targetX = this.mouseSteerInput;
+    }
+    
+    this.targetX = Math.max(-4, Math.min(4, this.targetX));
+    this.currentX += (this.targetX - this.currentX) * 10 * delta;
+
+    if (this.playerGroup) {
+      this.playerGroup.position.x = this.currentX;
+    }
+
+    this.mainCamera.position.x = this.currentX;
+
+    this.leftMirrorCamera.position.x = this.currentX - 0.8;
+    this.leftMirrorCamera.lookAt(this.currentX - 4, 1.0, 100);
+
+    this.rightMirrorCamera.position.x = this.currentX + 0.8;
+    this.rightMirrorCamera.lookAt(this.currentX + 4, 1.0, 100);
+
+    this.rearMirrorCamera.position.x = this.currentX;
+    this.rearMirrorCamera.lookAt(this.currentX, 1.5, 100);
     
     // Move road lines to simulate speed
     this.roadGroup.children.forEach(child => {
-      if (child.geometry instanceof THREE.PlaneGeometry && child.scale.y === 1 && child.position.x !== 0 && child.position.y > 0) { // Check for lane lines
+      if (child instanceof THREE.Mesh && child.geometry instanceof THREE.PlaneGeometry && child.scale.y === 1 && child.position.x !== 0 && child.position.y > 0) { // Check for lane lines
           child.position.z += 10 * delta; // Player speed
           if (child.position.z > 50) {
             child.position.z -= 100;

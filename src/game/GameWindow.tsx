@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { GameEngine, GameEngineOptions, MirrorSide, TrafficEvent } from './GameEngine';
+import { GameEngine, GameEngineOptions, MirrorSide } from './GameEngine';
 
 export interface GameWindowHandle {
   start: () => void;
@@ -7,6 +7,7 @@ export interface GameWindowHandle {
   reset: () => void;
   notifyMirrorCheck: (side: MirrorSide) => void;
   getMirrorRegions: () => Record<MirrorSide, {x: number, y: number, width: number, height: number}>;
+  setControlsEnabled: (enabled: boolean) => void;
 }
 
 export interface GameWindowProps extends GameEngineOptions {
@@ -23,6 +24,7 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
       start: () => engineRef.current?.start(),
       pause: () => engineRef.current?.pause(),
       reset: () => engineRef.current?.reset(),
+      setControlsEnabled: (enabled: boolean) => engineRef.current?.setControlsEnabled(enabled),
       notifyMirrorCheck: (side: MirrorSide) => engineRef.current?.notifyMirrorCheck(side),
       getMirrorRegions: () => {
         if (engineRef.current) {
@@ -55,11 +57,29 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
     }, [onTrafficEvent]);
 
     return (
-      <div 
-        ref={containerRef} 
-        className={className} 
-        style={{ width: '100%', height: '100%', overflow: 'hidden', ...style }} 
-      />
+      <div style={{ position: 'relative', width: '100%', height: '100%', ...style }}>
+        <div 
+          ref={containerRef} 
+          className={className} 
+          style={{ width: '100%', height: '100%', overflow: 'hidden' }} 
+        />
+        <div style={{
+          position: 'absolute',
+          bottom: '16px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'rgba(0, 0, 0, 0.7)',
+          color: 'white',
+          padding: '6px 12px',
+          borderRadius: '4px',
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          pointerEvents: 'none',
+          userSelect: 'none'
+        }}>
+          [J] Left &nbsp;&bull;&nbsp; [L] Right &nbsp;&bull;&nbsp; or mouse
+        </div>
+      </div>
     );
   }
 );
