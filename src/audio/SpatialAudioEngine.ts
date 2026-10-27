@@ -27,6 +27,11 @@ export class SpatialAudioEngine {
   private isGazeCancelled = false;
   private currentGazeZone: GazeZone = 'CENTER';
 
+  // Closed-loop latch state so checking a mirror silences that threat even after returning gaze to road
+  private acknowledgedThreatIds: Set<string> = new Set();
+  private latchedTarget: ProxyTarget | null = null;
+  private latchedUntilTimestamp = 0;
+
   constructor() {}
 
   public async init(): Promise<boolean> {
@@ -37,7 +42,8 @@ export class SpatialAudioEngine {
       return true;
     }
 
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AudioContextClass =
+      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     this.ctx = new AudioContextClass({ latencyHint: 'interactive' });
 
     // Master Gain
@@ -98,6 +104,14 @@ export class SpatialAudioEngine {
     return this.isThreatAlertsSuspended;
   }
 
+  public resetAcknowledgments() {
+    this.acknowledgedThreatIds.clear();
+    this.latchedTarget = null;
+    this.latchedUntilTimestamp = 0;
+    this.isGazeCancelled = false;
+    this.evaluateGazeCancellation();
+  }
+
   private setupListener() {
     if (!this.ctx) return;
     const l = this.ctx.listener;
@@ -149,12 +163,12 @@ export class SpatialAudioEngine {
   private setupEarlyReflections() {
     if (!this.ctx || !this.masterGain) return;
     this.earlyReflectionGain = this.ctx.createGain();
-    this.earlyReflectionGain.gain.setValueAtTime(0.12, this.ctx.currentTime);
+    this.earlyReflectionGain.gain.setValueAtTime(0.14, this.ctx.currentTime);
 
     this.earlyDelay1 = this.ctx.createDelay(0.1);
-    this.earlyDelay1.delayTime.setValueAtTime(0.013, this.ctx.currentTime); // 13ms reflection
+    this.earlyDelay1.delayTime.setValueAtTime(0.013, this.ctx.currentTime); // 13ms cabin reflection
     this.earlyDelay2 = this.ctx.createDelay(0.1);
-    this.earlyDelay2.delayTime.setValueAtTime(0.019, this.ctx.currentTime); // 19ms reflection
+    this.earlyDelay2.delayTime.setValueAtTime(0.019, this.ctx.currentTime); // 19ms cabin reflection
 
     this.earlyDelay1.connect(this.earlyReflectionGain);
     this.earlyDelay2.connect(this.earlyReflectionGain);
@@ -165,24 +179,28 @@ export class SpatialAudioEngine {
     if (!this.ctx || !this.masterGain) return;
 
     if (this.panner) {
-      try { this.panner.disconnect(); } catch {}
+      try {
+        this.panner.disconnect();
+      } catch {}
     }
     if (this.pinnaFilter) {
-      try { this.pinnaFilter.disconnect(); } catch {}
+      try {
+        this.pinnaFilter.disconnect();
+      } catch {}
     }
 
     this.panner = this.ctx.createPanner();
     this.panner.panningModel = this.config.panningModel;
     this.panner.distanceModel = 'inverse';
-    this.panner.refDistance = 2.0;
+    this.panner.refDistance = 2.5;
     this.panner.maxDistance = 60.0;
-    this.panner.rolloffFactor = 0.8;
+    this.panner.rolloffFactor = 0.75;
     this.panner.coneInnerAngle = 360;
 
     // Pinna spectral filter (shapes rear frequencies to eliminate front-back confusion)
     this.pinnaFilter = this.ctx.createBiquadFilter();
     this.pinnaFilter.type = 'highshelf';
-    this.pinnaFilter.frequency.setValueAtTime(4500, this.ctx.currentTime);
+    this.pinnaFilter.frequency.setValueAtTime(4200, this.ctx.currentTime);
     this.pinnaFilter.gain.setValueAtTime(0, this.ctx.currentTime);
 
     // Connect: Pinna -> Panner -> Master + Early Reflections
@@ -203,23 +221,23 @@ export class SpatialAudioEngine {
     // Vehicle: X=Lateral (Right+), Y=Longitudinal (Forward+)
     // Audio:   X=Right(+), Y=Up(+), Z=Behind(+) / Forward(-)
     const audioX = xVeh;
-    const audioY = 1.0;
+    const audioY = 1.1;
     const audioZ = -yVeh;
 
     if (this.panner.positionX) {
-      this.panner.positionX.setTargetAtTime(audioX, t, 0.04);
-      this.panner.positionY.setTargetAtTime(audioY, t, 0.04);
-      this.panner.positionZ.setTargetAtTime(audioZ, t, 0.04);
+      this.panner.positionX.setTargetAtTime(audioX, t, 0.035);
+      this.panner.positionY.setTargetAtTime(audioY, t, 0.035);
+      this.panner.positionZ.setTargetAtTime(audioZ, t, 0.035);
     } else {
       this.panner.setPosition(audioX, audioY, audioZ);
     }
 
     // Rear Pinna Spectral Notch Filter:
-    // Attenuate highs (>4.5 kHz) by -4dB when threat is in rear hemisphere (|azimuth| > 105°)
+    // Attenuate highs (>4.2 kHz) by -5.0dB when threat is in rear hemisphere (|azimuth| > 105°)
     if (this.pinnaFilter) {
       const isRear = Math.abs(azimuthDeg) > 105;
-      const targetGain = isRear ? -4.5 : 0.0;
-      this.pinnaFilter.gain.setTargetAtTime(targetGain, t, 0.05);
+      const targetGain = isRear ? -5.0 : 1.0;
+      this.pinnaFilter.gain.setTargetAtTime(targetGain, t, 0.04);
     }
   }
 
@@ -228,6 +246,8 @@ export class SpatialAudioEngine {
     if (threat) {
       this.updateSpatialPosition(threat.x, threat.y, threat.azimuth);
       this.evaluateGazeCancellation();
+    } else {
+      this.isGazeCancelled = false;
     }
   }
 
@@ -242,14 +262,65 @@ export class SpatialAudioEngine {
       return;
     }
 
+    const now = performance.now();
     const target = this.currentThreat.proxyTarget;
-    const matches = 
+    const directMatch =
       (target === 'LEFT_MIRROR' && this.currentGazeZone === 'LEFT_MIRROR') ||
       (target === 'RIGHT_MIRROR' && this.currentGazeZone === 'RIGHT_MIRROR') ||
-      (target === 'REAR_MIRROR' && this.currentGazeZone === 'REAR_MIRROR') ||
-      (target === 'FRONT_WINDSHIELD' && this.currentGazeZone === 'CENTER');
+      (target === 'REAR_MIRROR' && this.currentGazeZone === 'REAR_MIRROR');
 
-    this.isGazeCancelled = matches;
+    if (directMatch) {
+      const wasCancelled = this.isGazeCancelled;
+      this.isGazeCancelled = true;
+      // Latch acknowledgment for this specific vehicle ID (or 4.5s for looping scenario)
+      if (this.currentThreat.id.startsWith('car_')) {
+        this.acknowledgedThreatIds.add(this.currentThreat.id);
+      }
+      this.latchedTarget = target;
+      this.latchedUntilTimestamp = now + 4500;
+
+      if (!wasCancelled && this.isAudioActive && !this.isThreatAlertsSuspended) {
+        this.playAcknowledgeEarcon();
+      }
+      return;
+    }
+
+    // Check if already latched for this vehicle or recent mirror check
+    if (
+      (this.currentThreat.id.startsWith('car_') && this.acknowledgedThreatIds.has(this.currentThreat.id)) ||
+      (this.latchedTarget === target && now < this.latchedUntilTimestamp)
+    ) {
+      this.isGazeCancelled = true;
+      return;
+    }
+
+    this.isGazeCancelled = false;
+  }
+
+  /**
+   * Subtle 2-note ascending confirmation chime when closed-loop gaze mutes an active threat
+   */
+  public playAcknowledgeEarcon() {
+    if (!this.ctx || !this.masterGain || this.config.isMuted) return;
+    try {
+      const t = this.ctx.currentTime;
+      const notes = [1046.5, 1567.98]; // C6 -> G6 pleasant confirmation
+      notes.forEach((freq, idx) => {
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, t + idx * 0.055);
+
+        gain.gain.setValueAtTime(0.0001, t + idx * 0.055);
+        gain.gain.exponentialRampToValueAtTime(0.12, t + idx * 0.055 + 0.008);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + idx * 0.055 + 0.14);
+
+        osc.connect(gain);
+        gain.connect(this.masterGain!);
+        osc.start(t + idx * 0.055);
+        osc.stop(t + idx * 0.055 + 0.15);
+      });
+    } catch {}
   }
 
   private startPulseScheduler() {
@@ -261,6 +332,8 @@ export class SpatialAudioEngine {
         return;
       }
 
+      this.evaluateGazeCancellation();
+
       if (
         this.ctx &&
         !this.isThreatAlertsSuspended &&
@@ -268,18 +341,18 @@ export class SpatialAudioEngine {
         this.currentThreat
       ) {
         const dist = this.currentThreat.distance;
-        if (dist <= 30.0) {
-          this.playAlertPulse();
+        if (dist <= 32.0) {
+          this.playAlertPulse(dist);
         }
       }
 
       // Compute dynamic delay based on threat distance (ISO 15006 urgency)
-      let nextDelayMs = 1000;
+      let nextDelayMs = 900;
       if (this.currentThreat) {
-        const d = Math.max(2.0, Math.min(30.0, this.currentThreat.distance));
-        // Exponential urgency curve: 30m -> 800ms; 4m -> 150ms
-        const ratio = (d - 2.0) / 28.0;
-        nextDelayMs = 150 + Math.pow(ratio, 1.4) * 650;
+        const d = Math.max(2.0, Math.min(32.0, this.currentThreat.distance));
+        // Exponential urgency curve: 32m -> 780ms; 3m -> 135ms
+        const ratio = (d - 2.0) / 30.0;
+        nextDelayMs = 135 + Math.pow(ratio, 1.45) * 645;
       }
 
       if (this.isAudioActive) {
@@ -299,59 +372,64 @@ export class SpatialAudioEngine {
     }
   }
 
-  public playAlertPulse() {
+  public playAlertPulse(distanceMeters = 10.0) {
     if (!this.ctx || !this.pinnaFilter || this.config.isMuted) return;
 
     const t = this.ctx.currentTime;
     const sound = this.config.soundType;
 
+    // ISO 15006 Pitch Escalation: closer threats shift pitch upward up to +25%
+    const clampedDist = Math.max(2.0, Math.min(30.0, distanceMeters));
+    const urgencyRatio = 1.0 - (clampedDist - 2.0) / 28.0; // 0.0 (far) to 1.0 (critical)
+    const pitchMultiplier = 1.0 + urgencyRatio * 0.25;
+
     if (sound === 'chime') {
-      this.synthesizeChime(t);
+      this.synthesizeChime(t, pitchMultiplier);
     } else if (sound === 'click_train') {
-      this.synthesizeClickTrain(t);
+      this.synthesizeClickTrain(t, pitchMultiplier);
     } else {
-      this.synthesizeSine(t);
+      this.synthesizeSine(t, pitchMultiplier);
     }
   }
 
-  private synthesizeChime(t: number) {
+  private synthesizeChime(t: number, pitchMult = 1.0) {
     if (!this.ctx || !this.pinnaFilter) return;
 
-    // Harmonic blend: 880Hz (A5) fundamental + 1320Hz + 2200Hz
-    const freqs = [880, 1320, 2200];
-    const gains = [0.28, 0.16, 0.08];
+    // Harmonic blend: 880Hz (A5) fundamental + 1320Hz + 2200Hz + 3520Hz (for pinna cues)
+    const freqs = [880 * pitchMult, 1320 * pitchMult, 2200 * pitchMult, 3520 * pitchMult];
+    const gains = [0.28, 0.16, 0.09, 0.05];
 
     freqs.forEach((freq, idx) => {
       const osc = this.ctx!.createOscillator();
       const gain = this.ctx!.createGain();
 
-      osc.type = 'triangle';
+      osc.type = idx === 3 ? 'sawtooth' : 'triangle';
       osc.frequency.setValueAtTime(freq, t);
 
       // Fast transient attack (3ms), exponential decay (120ms)
       gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(gains[idx], t + 0.004);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+      gain.gain.exponentialRampToValueAtTime(gains[idx], t + 0.003);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
 
       osc.connect(gain);
       gain.connect(this.pinnaFilter!);
 
       osc.start(t);
-      osc.stop(t + 0.15);
+      osc.stop(t + 0.14);
     });
   }
 
-  private synthesizeClickTrain(t: number) {
+  private synthesizeClickTrain(t: number, pitchMult = 1.0) {
     if (!this.ctx || !this.pinnaFilter) return;
 
-    // 3 rapid clicks 25ms apart
+    // 3 rapid broadband clicks 22ms apart
     for (let i = 0; i < 3; i++) {
-      const clickTime = t + i * 0.025;
+      const clickTime = t + i * 0.022;
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
 
       osc.type = 'square';
-      osc.frequency.setValueAtTime(1400, clickTime);
+      osc.frequency.setValueAtTime(1400 * pitchMult, clickTime);
 
       gain.gain.setValueAtTime(0.001, clickTime);
       gain.gain.exponentialRampToValueAtTime(0.24, clickTime + 0.002);
@@ -365,23 +443,23 @@ export class SpatialAudioEngine {
     }
   }
 
-  private synthesizeSine(t: number) {
+  private synthesizeSine(t: number, pitchMult = 1.0) {
     if (!this.ctx || !this.pinnaFilter) return;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(1000, t);
+    osc.frequency.setValueAtTime(1000 * pitchMult, t);
 
     gain.gain.setValueAtTime(0.001, t);
     gain.gain.exponentialRampToValueAtTime(0.3, t + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
 
     osc.connect(gain);
     gain.connect(this.pinnaFilter);
 
     osc.start(t);
-    osc.stop(t + 0.17);
+    osc.stop(t + 0.16);
   }
 
   /**
@@ -395,24 +473,34 @@ export class SpatialAudioEngine {
     if (this.masterGain) {
       this.masterGain.gain.setValueAtTime(this.config.masterVolume, this.ctx.currentTime);
     }
-    let x = 0, y = 10, az = 0;
+    let x = 0,
+      y = 10,
+      az = 0;
     switch (target) {
       case 'LEFT_MIRROR':
-        x = -6.0; y = 0.0; az = -90;
+        x = -5.0;
+        y = -1.5;
+        az = -95;
         break;
       case 'RIGHT_MIRROR':
-        x = 6.0; y = 0.0; az = 90;
+        x = 5.0;
+        y = -1.5;
+        az = 95;
         break;
       case 'REAR_MIRROR':
-        x = 0.0; y = -12.0; az = 180;
+        x = 0.0;
+        y = -10.0;
+        az = 180;
         break;
       case 'FRONT_WINDSHIELD':
-        x = 0.0; y = 12.0; az = 0;
+        x = 0.0;
+        y = 12.0;
+        az = 0;
         break;
     }
 
     this.updateSpatialPosition(x, y, az);
-    this.playAlertPulse();
+    this.playAlertPulse(8.0);
   }
 
   public setPanningModel(model: PanningModel) {

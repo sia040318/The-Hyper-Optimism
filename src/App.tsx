@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { HeaderHUD } from './components/HeaderHUD';
 import { CockpitHUD } from './components/CockpitHUD';
 import { RadarCanvas } from './components/RadarCanvas';
@@ -20,7 +20,7 @@ import { PanningModel, SoundType } from './types/audio';
 import { getScenarioThreats, createThreat } from './utils/threatScenarios';
 
 export const App: React.FC = () => {
-  // Services (singletons stored in refs)
+  // Services (singletons stored in useMemo)
   const audioEngine = useMemo(() => new SpatialAudioEngine(), []);
   const cvBridge = useMemo(() => new CVBridgeService('ws://127.0.0.1:8765/gaze'), []);
   const carlaBridge = useMemo(() => new CarlaBridgeService('ws://127.0.0.1:8765/carla'), []);
@@ -52,7 +52,6 @@ export const App: React.FC = () => {
     cvBridge.start();
     carlaBridge.start();
 
-    // Subscribe to In-Browser MediaPipe Vision Tracker
     const unsubscribeInBrowser = inBrowserVision.subscribe((msg) => {
       setCurrentGaze(msg.gaze_zone);
       setDwellTimeMs(msg.dwell_time_ms);
@@ -64,7 +63,6 @@ export const App: React.FC = () => {
       audioEngine.setGazeZone(msg.gaze_zone);
     });
 
-    // Subscribe to external Python CV WebSocket (fallback)
     const unsubscribeCv = cvBridge.subscribe((msg, mode) => {
       if (inBrowserVision.getIsRunning()) return;
 
@@ -75,7 +73,6 @@ export const App: React.FC = () => {
       setIsCvConnected(cvBridge.getIsConnected());
       setIrisRatio(null);
 
-      // Update audio engine listener orientation
       audioEngine.updateHeadOrientation(msg.head_pose);
       audioEngine.setGazeZone(msg.gaze_zone);
     });
@@ -116,20 +113,29 @@ export const App: React.FC = () => {
   }, [primaryThreat, audioEngine]);
 
   // Traffic Event Handler from Three.js Game Engine
-  const handleTrafficEvent = (event: TrafficEvent) => {
-    const target: ProxyTarget = event.side === 'left' ? 'LEFT_MIRROR' : 'RIGHT_MIRROR';
-    console.log(`[Three.js Game] Traffic alert: ${event.type} on ${event.side} side.`);
+  const handleTrafficEvent = useCallback(
+    (event: TrafficEvent) => {
+      let target: ProxyTarget = 'FRONT_WINDSHIELD';
+      if (event.side === 'left') target = 'LEFT_MIRROR';
+      else if (event.side === 'right') target = 'RIGHT_MIRROR';
+      else if (event.side === 'rear') target = 'REAR_MIRROR';
 
-    // If audio is active, trigger directional alert
-    if (isAudioActive) {
-      audioEngine.testDirection(target);
-    }
+      if (isAudioActive) {
+        audioEngine.testDirection(target);
+      }
+    },
+    [isAudioActive, audioEngine]
+  );
 
-    // Reflect threat in HUD radar
-    const threatX = event.side === 'left' ? -3.8 : 3.8;
-    const threatY = event.type === 'blind_spot' ? -1.0 : -6.0;
-    setThreats([createThreat(`car_${event.vehicleId}`, 'car', threatX, threatY, 0, 14, true)]);
-  };
+  // Live Threats Stream from 3D GameEngine (keeps 2D Radar & 3D HRTF Audio synced with 3D Traffic!)
+  const handleGameThreatsUpdate = useCallback(
+    (gameThreats: ThreatObstacle[]) => {
+      if (stageView === '3D_GAME' || stageView === 'SPLIT' || isGameFullscreen) {
+        setThreats(gameThreats);
+      }
+    },
+    [stageView, isGameFullscreen]
+  );
 
   // Synchronize gaze with game window mirror check acknowledgment
   useEffect(() => {
@@ -147,35 +153,44 @@ export const App: React.FC = () => {
     gameWindowRef.current?.updateDriverHeadPose(headPose.yaw, headPose.pitch);
   }, [headPose]);
 
-  // Global Keyboard Shortcuts for simulation
+  // Global Keyboard Shortcuts (1, 2, 3, 4 for Gaze, C for Camera, Esc for Fullscreen exit)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in an input field or modal
       if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'SELECT') {
         return;
       }
 
-      if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') {
+      if (e.key === 'Escape' && isGameFullscreen) {
+        setIsGameFullscreen(false);
+        return;
+      }
+
+      if (isStudyModalOpen) return;
+
+      if (e.key === '1') {
         e.preventDefault();
         cvBridge.simulateGaze('LEFT_MIRROR');
-      } else if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') {
+      } else if (e.key === '3') {
         e.preventDefault();
         cvBridge.simulateGaze('RIGHT_MIRROR');
-      } else if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') {
+      } else if (e.key === '4') {
         e.preventDefault();
         cvBridge.simulateGaze('REAR_MIRROR');
-      } else if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') {
+      } else if (e.key === '2' || e.key === '0') {
         e.preventDefault();
         cvBridge.simulateGaze('CENTER');
+      } else if (e.key === 'c' || e.key === 'C') {
+        gameWindowRef.current?.toggleCameraMode();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cvBridge]);
+  }, [cvBridge, isGameFullscreen, isStudyModalOpen]);
 
-  // Continuous physics animation loop for moving scenarios (e.g. orbit, overtake)
+  // Continuous physics animation loop ONLY when in standalone 2D_RADAR mode
   useEffect(() => {
+    if (stageView !== '2D_RADAR' || isGameFullscreen) return;
     if (currentScenario === 'MANUAL') return;
 
     let animId: number;
@@ -187,20 +202,17 @@ export const App: React.FC = () => {
       lastTime = now;
 
       setThreats((prev) => {
-        if (!prev.length) return prev;
+        if (!prev.length) return getScenarioThreats(currentScenario);
         const copy = [...prev];
         const primary = { ...copy[0] };
 
         if (currentScenario === 'BLIND_SPOT_LEFT') {
-          // Overtaking car moving forward from behind
           primary.y += 3.4 * dt;
           if (primary.y > 6.0) primary.y = -14.0;
         } else if (currentScenario === 'REAR_TAILGATER') {
-          // Rapidly closing in from rear
           primary.y += 5.5 * dt;
           if (primary.y > -4.0) primary.y = -26.0;
         } else if (currentScenario === 'FRONT_CUT_IN') {
-          // Decelerating lead vehicle coming closer
           primary.y -= 3.0 * dt;
           if (primary.y < 5.0) primary.y = 24.0;
         } else if (currentScenario === 'ORBIT_360') {
@@ -209,7 +221,6 @@ export const App: React.FC = () => {
           primary.y = Math.cos(orbitAngle) * 12.0;
         }
 
-        // Recalculate azimuth and distance
         const az = (Math.atan2(primary.x, primary.y) * 180) / Math.PI;
         const dist = Math.sqrt(primary.x * primary.x + primary.y * primary.y);
         let proxy: ProxyTarget = 'FRONT_WINDSHIELD';
@@ -230,18 +241,21 @@ export const App: React.FC = () => {
 
     animId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animId);
-  }, [currentScenario]);
+  }, [currentScenario, stageView, isGameFullscreen]);
 
   // Handler for user moving threat on radar
   const handleThreatMoved = (updatedThreat: ThreatObstacle) => {
+    audioEngine.resetAcknowledgments();
     setCurrentScenario('MANUAL');
     setThreats([updatedThreat]);
   };
 
-  // Scenario change handler
+  // Scenario change handler (triggers in BOTH 3D Game and 2D Radar!)
   const handleSelectScenario = (sc: ScenarioType) => {
+    audioEngine.resetAcknowledgments();
     setCurrentScenario(sc);
     setThreats(getScenarioThreats(sc));
+    gameWindowRef.current?.triggerScenario(sc);
   };
 
   // Audio Toggle
@@ -273,6 +287,7 @@ export const App: React.FC = () => {
   };
 
   const handleTestDirection = (target: ProxyTarget) => {
+    audioEngine.resetAcknowledgments();
     if (!isAudioActive) {
       audioEngine.start().then(() => {
         setIsAudioActive(true);
@@ -283,7 +298,17 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleSimulateGaze = useCallback(
+    (zone: GazeZone) => {
+      if (!inBrowserVision.getIsRunning()) {
+        cvBridge.simulateGaze(zone);
+      }
+    },
+    [cvBridge]
+  );
+
   const isSilenced = audioEngine.getIsCancelled();
+  const showGameView = stageView === '3D_GAME' || stageView === 'SPLIT' || isGameFullscreen;
 
   return (
     <div className="app-container">
@@ -301,7 +326,7 @@ export const App: React.FC = () => {
       {/* 3-Column Cockpit Workspace */}
       <main className="cockpit-main">
         {/* Column 1: Audio Engine & Traffic Scenarios */}
-        <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <aside className="side-column">
           <AudioControlPanel
             isAudioActive={isAudioActive}
             onToggleAudio={handleToggleAudio}
@@ -322,99 +347,182 @@ export const App: React.FC = () => {
           </div>
         </aside>
 
-        {/* Column 2: Center Cockpit Stage (Cabin Mirrors + Radar / 3D Game) */}
-        <section className="radar-stage" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {/* Stage View Switcher */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255, 255, 255, 0.04)', padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
-              COCKPIT VISUALIZATION
-            </span>
+        {/* Column 2: Center Cockpit Stage (Cabin Mirrors + 3D Game / 2D Radar) */}
+        <section className="radar-stage">
+          {/* Stage View Switcher Header */}
+          <div className="stage-toolbar">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: '#00f0ff',
+                  boxShadow: '0 0 8px #00f0ff'
+                }}
+              />
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  color: 'var(--text-main)',
+                  letterSpacing: '0.06em'
+                }}
+              >
+                VIRTUAL COCKPIT & SPATIAL PROXY VIEWPORT
+              </span>
+            </div>
+
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 className={`btn ${stageView === '3D_GAME' ? 'btn-primary' : ''}`}
                 onClick={() => setStageView('3D_GAME')}
-                style={{ fontSize: '11px', padding: '4px 10px' }}
+                style={{ fontSize: '11px', padding: '5px 12px' }}
               >
-                🎮 3D Driving Game (Three.js)
+                🎮 3D Highway Cockpit
               </button>
               <button
                 className={`btn ${stageView === 'SPLIT' ? 'btn-primary' : ''}`}
                 onClick={() => setStageView('SPLIT')}
-                style={{ fontSize: '11px', padding: '4px 10px' }}
+                style={{ fontSize: '11px', padding: '5px 12px' }}
               >
-                ⚡ Split View
+                ⚡ Split 3D + Radar
               </button>
               <button
                 className={`btn ${stageView === '2D_RADAR' ? 'btn-primary' : ''}`}
-                onClick={() => setStageView('2D_RADAR')}
-                style={{ fontSize: '11px', padding: '4px 10px' }}
+                onClick={() => {
+                  setStageView('2D_RADAR');
+                  setThreats(getScenarioThreats(currentScenario));
+                }}
+                style={{ fontSize: '11px', padding: '5px 12px' }}
               >
-                📡 2D Radar
+                📡 2D Tactical Radar
               </button>
             </div>
           </div>
 
-          {/* 3D Game Window */}
-          {(stageView === '3D_GAME' || stageView === 'SPLIT') && (
-            <div
-              style={{
-                height: stageView === 'SPLIT' ? '300px' : '420px',
-                width: '100%',
-                borderRadius: '8px',
-                overflow: 'hidden',
-                position: 'relative',
-                border: '1px solid rgba(0, 240, 255, 0.3)',
-                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5)'
-              }}
-            >
-              <GameWindow
-                ref={gameWindowRef}
-                onTrafficEvent={handleTrafficEvent}
-                driverGaze={currentGaze}
-                onToggleFullscreen={() => setIsGameFullscreen(true)}
-              />
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '8px',
-                  left: '8px',
-                  background: 'rgba(0, 0, 0, 0.65)',
-                  backdropFilter: 'blur(4px)',
-                  padding: '3px 8px',
-                  borderRadius: '4px',
-                  fontSize: '10px',
-                  color: '#38bdf8',
-                  fontWeight: 600,
-                  pointerEvents: 'none'
-                }}
-              >
-                ● THREE.JS HIGHWAY SIMULATOR (Mirrors Active)
-              </div>
-            </div>
-          )}
-
+          {/* Interactive Cabin Mirror Status Bar */}
           <CockpitHUD
             currentGaze={currentGaze}
             activeTarget={primaryThreat ? primaryThreat.proxyTarget : null}
             isSilenced={isSilenced}
-            onSelectGaze={(zone) => {
-              if (!inBrowserVision.getIsRunning()) {
-                cvBridge.simulateGaze(zone);
-              }
-            }}
+            onSelectGaze={handleSimulateGaze}
           />
+
+          {/* Single Persistent 3D Game Window (Expands seamlessly to Fullscreen when toggled!) */}
+          <div
+            style={
+              isGameFullscreen
+                ? {
+                    position: 'fixed',
+                    inset: 0,
+                    zIndex: 9999,
+                    background: '#060a14',
+                    display: 'flex',
+                    flexDirection: 'column'
+                  }
+                : {
+                    display: showGameView ? 'flex' : 'none',
+                    flex: stageView === 'SPLIT' ? 1.25 : 1,
+                    minHeight: stageView === 'SPLIT' ? '260px' : '380px',
+                    width: '100%',
+                    borderRadius: '10px',
+                    overflow: 'hidden',
+                    position: 'relative',
+                    border: '1px solid rgba(0, 240, 255, 0.35)',
+                    boxShadow: '0 6px 28px rgba(0, 0, 0, 0.65)'
+                  }
+            }
+          >
+            {/* Floating Quick-Scenario Bar when in Fullscreen Mode */}
+            {isGameFullscreen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '44px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  zIndex: 25,
+                  background: 'rgba(9, 13, 22, 0.88)',
+                  backdropFilter: 'blur(12px)',
+                  border: '1px solid rgba(0, 240, 255, 0.3)',
+                  borderRadius: '20px',
+                  padding: '5px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.75)'
+                }}
+              >
+                <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>
+                  INJECT SCENARIO:
+                </span>
+                <button
+                  className="btn"
+                  style={{ fontSize: '10px', padding: '3px 8px' }}
+                  onClick={() => handleSelectScenario('BLIND_SPOT_LEFT')}
+                >
+                  Left Blind Spot
+                </button>
+                <button
+                  className="btn"
+                  style={{ fontSize: '10px', padding: '3px 8px' }}
+                  onClick={() => handleSelectScenario('BLIND_SPOT_RIGHT')}
+                >
+                  Right Blind Spot
+                </button>
+                <button
+                  className="btn"
+                  style={{ fontSize: '10px', padding: '3px 8px' }}
+                  onClick={() => handleSelectScenario('REAR_TAILGATER')}
+                >
+                  Rear Tailgater
+                </button>
+                <button
+                  className="btn"
+                  style={{ fontSize: '10px', padding: '3px 8px' }}
+                  onClick={() => handleSelectScenario('FRONT_CUT_IN')}
+                >
+                  Front Cut-In
+                </button>
+                <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.15)' }} />
+                <button
+                  className={`btn ${isAudioActive ? 'btn-primary' : 'btn-danger'}`}
+                  style={{ fontSize: '10px', padding: '3px 10px' }}
+                  onClick={handleToggleAudio}
+                >
+                  {isAudioActive ? '🔊 3D Audio ON' : '🔇 Enable 3D Audio'}
+                </button>
+              </div>
+            )}
+
+            <GameWindow
+              ref={gameWindowRef}
+              onTrafficEvent={handleTrafficEvent}
+              onThreatsUpdate={handleGameThreatsUpdate}
+              driverGaze={currentGaze}
+              isSilenced={isSilenced}
+              isFullscreenMode={isGameFullscreen}
+              onToggleFullscreen={() => setIsGameFullscreen((prev) => !prev)}
+              onSelectGaze={handleSimulateGaze}
+            />
+          </div>
 
           {/* 2D Tactical Radar */}
           {(stageView === '2D_RADAR' || stageView === 'SPLIT') && (
-            <RadarCanvas
-              threats={threats}
-              onThreatMoved={handleThreatMoved}
-            />
+            <div style={{ flex: 1, minHeight: '220px', display: 'flex' }}>
+              <RadarCanvas
+                threats={threats}
+                currentGaze={currentGaze}
+                isSilenced={isSilenced}
+                onThreatMoved={handleThreatMoved}
+              />
+            </div>
           )}
         </section>
 
         {/* Column 3: Telemetry, Gaze, and In-Browser Vision */}
-        <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <aside className="side-column">
           <DriverCameraPIP
             currentGaze={currentGaze}
             headPose={headPose}
@@ -431,11 +539,7 @@ export const App: React.FC = () => {
             inputMode={inputMode}
             isCvConnected={isCvConnected}
             irisRatio={irisRatio}
-            onSimulateGaze={(zone) => {
-              if (!inBrowserVision.getIsRunning()) {
-                cvBridge.simulateGaze(zone);
-              }
-            }}
+            onSimulateGaze={handleSimulateGaze}
           />
         </aside>
       </main>
@@ -448,81 +552,6 @@ export const App: React.FC = () => {
         isAudioActive={isAudioActive}
         onAudioActiveChange={setIsAudioActive}
       />
-
-      {/* Fullscreen Immersive Driver Game Mode */}
-      {isGameFullscreen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9999,
-            background: '#090d16',
-            display: 'flex',
-            flexDirection: 'column'
-          }}
-        >
-          {/* Top Floating Control Bar */}
-          <div
-            style={{
-              position: 'absolute',
-              top: '12px',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              zIndex: 30,
-              background: 'rgba(9, 13, 22, 0.88)',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(0, 240, 255, 0.3)',
-              borderRadius: '24px',
-              padding: '6px 18px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '16px',
-              boxShadow: '0 8px 30px rgba(0,0,0,0.7)'
-            }}
-          >
-            <span style={{ fontSize: '11px', fontWeight: 800, color: '#00f0ff', letterSpacing: '0.05em' }}>
-              ● 3D DRIVER CABIN
-            </span>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '11px', color: isAudioActive ? '#10b981' : 'var(--text-dim)', fontWeight: 600 }}>
-                {isAudioActive ? '🔊 3D Spatial Audio Active' : '🔇 Audio Off'}
-              </span>
-              {!isAudioActive && (
-                <button
-                  onClick={handleToggleAudio}
-                  className="btn btn-primary"
-                  style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '12px' }}
-                >
-                  Turn Audio On
-                </button>
-              )}
-            </div>
-
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              Eye Gaze: <strong style={{ color: currentGaze !== 'CENTER' ? '#10b981' : '#fff' }}>{currentGaze}</strong>
-            </span>
-
-            <button
-              onClick={() => setIsGameFullscreen(false)}
-              className="btn btn-secondary"
-              style={{ fontSize: '11px', padding: '4px 12px', borderRadius: '14px', background: 'rgba(255,255,255,0.1)' }}
-            >
-              Exit Game Mode (Esc)
-            </button>
-          </div>
-
-          <div style={{ flex: 1, width: '100%', height: '100%' }}>
-            <GameWindow
-              ref={gameWindowRef}
-              onTrafficEvent={handleTrafficEvent}
-              driverGaze={currentGaze}
-              isFullscreenMode={true}
-              onToggleFullscreen={() => setIsGameFullscreen(false)}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 };

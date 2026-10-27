@@ -15,9 +15,13 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({
   isSilenced,
   onSelectGaze
 }) => {
-  const isLeftAlert = activeTarget === 'LEFT_MIRROR';
-  const isRightAlert = activeTarget === 'RIGHT_MIRROR';
-  const isRearAlert = activeTarget === 'REAR_MIRROR';
+  const isLeftAlert = activeTarget === 'LEFT_MIRROR' && !isSilenced;
+  const isRightAlert = activeTarget === 'RIGHT_MIRROR' && !isSilenced;
+  const isRearAlert = activeTarget === 'REAR_MIRROR' && !isSilenced;
+
+  const isLeftSilenced = activeTarget === 'LEFT_MIRROR' && isSilenced;
+  const isRightSilenced = activeTarget === 'RIGHT_MIRROR' && isSilenced;
+  const isRearSilenced = activeTarget === 'REAR_MIRROR' && isSilenced;
 
   const isLeftFocused = currentGaze === 'LEFT_MIRROR';
   const isRightFocused = currentGaze === 'RIGHT_MIRROR';
@@ -27,59 +31,71 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({
     <div className="mirrors-hud">
       {/* Left Side Mirror */}
       <div
-        className={`mirror-card ${isLeftAlert ? 'alert-active' : ''} ${isLeftFocused ? 'gaze-focused' : ''}`}
+        className={`mirror-card ${isLeftAlert ? 'alert-active' : ''} ${
+          isLeftFocused || isLeftSilenced ? 'gaze-focused' : ''
+        }`}
         onClick={() => onSelectGaze('LEFT_MIRROR')}
         style={{ cursor: 'pointer' }}
       >
-        <span className="mirror-label">LEFT SIDE MIRROR</span>
+        <span className="mirror-label">◀ LEFT WING MIRROR (-90°)</span>
         <span className="mirror-status">
-          {isLeftFocused && isLeftAlert
-            ? (isSilenced ? '✓ CLOSED-LOOP MUTED' : '✓ ACKNOWLEDGED')
+          {isLeftSilenced
+            ? '✓ CLOSED-LOOP MUTED'
+            : isLeftFocused && isLeftAlert
+            ? '✓ ACKNOWLEDGED'
             : isLeftAlert
-            ? '⚠ WARNING'
+            ? '⚠ BLIND SPOT ALERT'
             : isLeftFocused
-            ? '👁 FOCUSED'
+            ? '👁 GAZE LOCKED'
             : 'CLEAR'}
         </span>
-        <span className="mirror-hint">Press A or ←</span>
+        <span className="mirror-hint">Press [1] or Click Mirror</span>
       </div>
 
       {/* Rear-View Mirror */}
       <div
-        className={`mirror-card ${isRearAlert ? 'alert-active' : ''} ${isRearFocused ? 'gaze-focused' : ''}`}
+        className={`mirror-card ${isRearAlert ? 'alert-active' : ''} ${
+          isRearFocused || isRearSilenced ? 'gaze-focused' : ''
+        }`}
         onClick={() => onSelectGaze('REAR_MIRROR')}
         style={{ cursor: 'pointer' }}
       >
-        <span className="mirror-label">REAR-VIEW MIRROR</span>
+        <span className="mirror-label">▼ REAR-VIEW MIRROR (180°)</span>
         <span className="mirror-status">
-          {isRearFocused && isRearAlert
+          {isRearSilenced
+            ? '✓ CLOSED-LOOP MUTED'
+            : isRearFocused && isRearAlert
             ? '✓ ACKNOWLEDGED'
             : isRearAlert
-            ? '⚠ WARNING'
+            ? '⚠ TAILGATER ALERT'
             : isRearFocused
-            ? '👁 FOCUSED'
+            ? '👁 GAZE LOCKED'
             : 'CLEAR'}
         </span>
-        <span className="mirror-hint">Press S or ↓</span>
+        <span className="mirror-hint">Press [4] or Click Mirror</span>
       </div>
 
       {/* Right Side Mirror */}
       <div
-        className={`mirror-card ${isRightAlert ? 'alert-active' : ''} ${isRightFocused ? 'gaze-focused' : ''}`}
+        className={`mirror-card ${isRightAlert ? 'alert-active' : ''} ${
+          isRightFocused || isRightSilenced ? 'gaze-focused' : ''
+        }`}
         onClick={() => onSelectGaze('RIGHT_MIRROR')}
         style={{ cursor: 'pointer' }}
       >
-        <span className="mirror-label">RIGHT SIDE MIRROR</span>
+        <span className="mirror-label">RIGHT WING MIRROR (+90°) ▶</span>
         <span className="mirror-status">
-          {isRightFocused && isRightAlert
+          {isRightSilenced
+            ? '✓ CLOSED-LOOP MUTED'
+            : isRightFocused && isRightAlert
             ? '✓ ACKNOWLEDGED'
             : isRightAlert
-            ? '⚠ WARNING'
+            ? '⚠ BLIND SPOT ALERT'
             : isRightFocused
-            ? '👁 FOCUSED'
+            ? '👁 GAZE LOCKED'
             : 'CLEAR'}
         </span>
-        <span className="mirror-hint">Press D or →</span>
+        <span className="mirror-hint">Press [3] or Click Mirror</span>
       </div>
     </div>
   );

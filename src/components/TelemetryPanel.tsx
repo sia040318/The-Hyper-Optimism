@@ -29,10 +29,14 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
 
   const getUrgencyColor = () => {
     switch (urgency) {
-      case 'CRITICAL': return 'var(--accent-rose)';
-      case 'WARNING': return 'var(--accent-amber)';
-      case 'AWARENESS': return 'var(--accent-cyan)';
-      default: return 'var(--accent-emerald)';
+      case 'CRITICAL':
+        return 'var(--accent-rose)';
+      case 'WARNING':
+        return 'var(--accent-amber)';
+      case 'AWARENESS':
+        return 'var(--accent-cyan)';
+      default:
+        return 'var(--accent-emerald)';
     }
   };
 
@@ -43,13 +47,26 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           <Gauge size={14} color="var(--accent-cyan)" />
           Threat Telemetry
         </h2>
+        {primaryThreat && (
+          <span
+            style={{
+              fontSize: 10,
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--text-muted)'
+            }}
+          >
+            {primaryThreat.name}
+          </span>
+        )}
       </div>
 
       <div className="telemetry-grid">
         <div className="telemetry-item">
           <div className="telemetry-label">Relative Azimuth</div>
           <div className="telemetry-value">
-            {primaryThreat ? `${primaryThreat.azimuth.toFixed(1)}°` : '--'}
+            {primaryThreat
+              ? `${primaryThreat.azimuth > 0 ? '+' : ''}${primaryThreat.azimuth.toFixed(1)}°`
+              : '--'}
           </div>
         </div>
 
@@ -68,7 +85,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
         </div>
 
         <div className="telemetry-item">
-          <div className="telemetry-label">Urgency Level</div>
+          <div className="telemetry-label">Urgency (ISO 15006)</div>
           <div className="telemetry-value" style={{ color: getUrgencyColor(), fontSize: 13 }}>
             {urgency}
           </div>
@@ -79,7 +96,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
       <div className="panel-header" style={{ marginTop: 4 }}>
         <h2 className="panel-title">
           <Eye size={14} color="var(--accent-violet)" />
-          Driver Monitoring Telemetry
+          Driver Gaze Telemetry
         </h2>
         <span
           style={{
@@ -94,14 +111,23 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
             ? '● In-Browser MediaPipe'
             : isCvConnected && inputMode === 'CV_WEBSOCKET'
             ? '● Python WS Stream'
-            : 'Keyboard Simulation'}
+            : 'Keyboard / Click Sim'}
         </span>
       </div>
 
-      <div className="telemetry-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div
+        className="telemetry-item"
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
         <div>
           <div className="telemetry-label">Active Gaze Focus</div>
-          <div className="telemetry-value" style={{ fontSize: 14 }}>
+          <div
+            className="telemetry-value"
+            style={{
+              fontSize: 14,
+              color: currentGaze !== 'CENTER' ? 'var(--accent-emerald)' : '#fff'
+            }}
+          >
             {currentGaze}
           </div>
         </div>
@@ -118,13 +144,13 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
         <div className="telemetry-item">
           <div className="telemetry-label">Head Yaw (L/R)</div>
           <div className="telemetry-value" style={{ fontSize: 13 }}>
-            {headPose.yaw.toFixed(1)}°
+            {headPose.yaw > 0 ? `+${headPose.yaw.toFixed(1)}` : headPose.yaw.toFixed(1)}°
           </div>
         </div>
         <div className="telemetry-item">
           <div className="telemetry-label">Head Pitch (Up/Dn)</div>
           <div className="telemetry-value" style={{ fontSize: 13 }}>
-            {headPose.pitch.toFixed(1)}°
+            {headPose.pitch > 0 ? `+${headPose.pitch.toFixed(1)}` : headPose.pitch.toFixed(1)}°
           </div>
         </div>
         {irisRatio !== undefined && irisRatio !== null && (
@@ -139,29 +165,37 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
 
       {/* Simulation Trigger Buttons */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-        <div className="telemetry-label">Keyboard Simulation Shortcuts:</div>
+        <div className="telemetry-label">Quick Gaze Simulation (Keys 1 – 4):</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-          <button className="btn" onClick={() => onSimulateGaze('LEFT_MIRROR')} style={{ fontSize: 10 }}>
-            Left Mirror (A / ←)
+          <button
+            className={`btn ${currentGaze === 'LEFT_MIRROR' ? 'btn-primary' : ''}`}
+            onClick={() => onSimulateGaze('LEFT_MIRROR')}
+            style={{ fontSize: 11 }}
+          >
+            ◀ Left Mirror [1]
           </button>
-          <button className="btn" onClick={() => onSimulateGaze('RIGHT_MIRROR')} style={{ fontSize: 10 }}>
-            Right Mirror (D / →)
+          <button
+            className={`btn ${currentGaze === 'RIGHT_MIRROR' ? 'btn-primary' : ''}`}
+            onClick={() => onSimulateGaze('RIGHT_MIRROR')}
+            style={{ fontSize: 11 }}
+          >
+            Right Mirror [3] ▶
           </button>
-          <button className="btn" onClick={() => onSimulateGaze('REAR_MIRROR')} style={{ fontSize: 10 }}>
-            Rear Mirror (S / ↓)
+          <button
+            className={`btn ${currentGaze === 'REAR_MIRROR' ? 'btn-primary' : ''}`}
+            onClick={() => onSimulateGaze('REAR_MIRROR')}
+            style={{ fontSize: 11 }}
+          >
+            ▼ Rear Mirror [4]
           </button>
-          <button className="btn" onClick={() => onSimulateGaze('CENTER')} style={{ fontSize: 10 }}>
-            Forward Road (W / ↑)
+          <button
+            className={`btn ${currentGaze === 'CENTER' ? 'btn-primary' : ''}`}
+            onClick={() => onSimulateGaze('CENTER')}
+            style={{ fontSize: 11 }}
+          >
+            ▲ Forward Road [2]
           </button>
         </div>
-      </div>
-
-      {/* Collaborator Help Info */}
-      <div className="telemetry-item" style={{ marginTop: 'auto', fontSize: 10, color: 'var(--text-dim)' }}>
-        <div style={{ fontWeight: 600, color: 'var(--text-muted)', marginBottom: 2 }}>
-          Collaborator CV Stream:
-        </div>
-        Run <code>python cv_bridge/cv_mediapipe_template.py</code> to connect live webcam head tracking.
       </div>
     </div>
   );

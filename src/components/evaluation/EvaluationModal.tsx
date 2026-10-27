@@ -1,5 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StudyCondition, TrialResult, ParticipantSession, ConditionSummary, SUSResponses, NasaTlxResponses } from '../../types/evaluation';
+import {
+  StudyCondition,
+  TrialResult,
+  ParticipantSession,
+  ConditionSummary,
+  SUSResponses,
+  NasaTlxResponses
+} from '../../types/evaluation';
 import { ProxyTarget } from '../../types/threats';
 import { SpatialAudioEngine } from '../../audio/SpatialAudioEngine';
 import { StudyResultsView } from './StudyResultsView';
@@ -16,8 +23,16 @@ interface EvaluationModalProps {
 }
 
 const TARGET_POOL: ProxyTarget[] = [
-  'LEFT_MIRROR', 'RIGHT_MIRROR', 'REAR_MIRROR', 'LEFT_MIRROR', 'RIGHT_MIRROR',
-  'REAR_MIRROR', 'FRONT_WINDSHIELD', 'LEFT_MIRROR', 'RIGHT_MIRROR', 'REAR_MIRROR'
+  'LEFT_MIRROR',
+  'RIGHT_MIRROR',
+  'REAR_MIRROR',
+  'FRONT_WINDSHIELD',
+  'LEFT_MIRROR',
+  'REAR_MIRROR',
+  'RIGHT_MIRROR',
+  'FRONT_WINDSHIELD',
+  'LEFT_MIRROR',
+  'REAR_MIRROR'
 ];
 
 export const EvaluationModal: React.FC<EvaluationModalProps> = ({
@@ -47,7 +62,6 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
   const trialTimeoutRef = useRef<number | null>(null);
   const initialAudioActiveRef = useRef<boolean>(false);
 
-  // Manage audio state and background alarms when modal opens/closes
   useEffect(() => {
     if (isOpen) {
       initialAudioActiveRef.current = isAudioActive;
@@ -68,25 +82,30 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
     }
   }, [isOpen]);
 
-  // Keyboard handler for trial responses
+  // Keyboard handler for trial responses (supports both 1/2/3/4 and WASD/Arrows)
   useEffect(() => {
     if (!isOpen || state !== 'WAITING_FOR_RESPONSE') return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       let response: ProxyTarget | null = null;
-      if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') response = 'LEFT_MIRROR';
-      if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') response = 'RIGHT_MIRROR';
-      if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') response = 'REAR_MIRROR';
-      if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') response = 'FRONT_WINDSHIELD';
+      if (e.key === '1' || e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft')
+        response = 'LEFT_MIRROR';
+      if (e.key === '3' || e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight')
+        response = 'RIGHT_MIRROR';
+      if (e.key === '4' || e.key === 's' || e.key === 'S' || e.key === 'ArrowDown')
+        response = 'REAR_MIRROR';
+      if (e.key === '2' || e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp')
+        response = 'FRONT_WINDSHIELD';
 
       if (response) {
+        e.preventDefault();
         handleUserResponse(response);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, state]);
+  });
 
   if (!isOpen) return null;
 
@@ -104,32 +123,31 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
     onClose();
   };
 
-  const startStudy = async () => {
+  const startStudyWithCondition = async (cond: StudyCondition) => {
+    setCondition(cond);
     await audioEngine.init();
     audioEngine.setThreatAlertsSuspended(true);
-    audioEngine.setPanningModel(condition === '3D_HRTF' ? 'HRTF' : 'equalpower');
+    audioEngine.setPanningModel(cond === '3D_HRTF' ? 'HRTF' : 'equalpower');
     setTrialLogs([]);
     setTrialIndex(0);
     setState('RUNNING_TRIAL');
-    runNextTrial(0, []);
+    runNextTrial(0, [], cond);
   };
 
-  const runNextTrial = (idx: number, currentLogs: TrialResult[]) => {
+  const runNextTrial = (idx: number, currentLogs: TrialResult[], activeCond: StudyCondition) => {
     if (idx >= 10) {
-      finishStudy(currentLogs);
+      finishStudy(currentLogs, activeCond);
       return;
     }
 
     setTrialIndex(idx + 1);
     setState('RUNNING_TRIAL');
 
-    // Random inter-trial pause between 1.0s and 1.8s
-    const pauseMs = 1000 + Math.random() * 800;
+    const pauseMs = 900 + Math.random() * 700;
     trialTimeoutRef.current = window.setTimeout(() => {
       const target = TARGET_POOL[idx % TARGET_POOL.length];
       activeTargetRef.current = target;
-      
-      // Trigger directional sound
+
       audioEngine.testDirection(target);
       soundStartTimeRef.current = performance.now();
       setState('WAITING_FOR_RESPONSE');
@@ -143,7 +161,6 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
     const target = activeTargetRef.current;
     const isCorrect = response === target;
 
-    // Check front-back confusion
     const isFrontBackReversal =
       (target === 'REAR_MIRROR' && response === 'FRONT_WINDSHIELD') ||
       (target === 'FRONT_WINDSHIELD' && response === 'REAR_MIRROR');
@@ -169,18 +186,16 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
     setTrialLogs(updatedLogs);
     activeTargetRef.current = null;
 
-    // Proceed to next trial after brief delay
-    runNextTrial(trialIndex, updatedLogs);
+    runNextTrial(trialIndex, updatedLogs, condition);
   };
 
-  const finishStudy = (logs: TrialResult[]) => {
+  const finishStudy = (logs: TrialResult[], completedCond: StudyCondition) => {
     if (trialTimeoutRef.current) {
       clearTimeout(trialTimeoutRef.current);
       trialTimeoutRef.current = null;
     }
     activeTargetRef.current = null;
 
-    // Immediately ensure results screen is completely silent
     audioEngine.setThreatAlertsSuspended(true);
     if (!initialAudioActiveRef.current) {
       audioEngine.stop();
@@ -198,7 +213,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
     const medianRt = sortedRts[Math.floor(sortedRts.length / 2)] || 0;
 
     const summary: ConditionSummary = {
-      condition,
+      condition: completedCond,
       totalTrials: total,
       correctTrials: correct,
       accuracyPercent: (correct / total) * 100,
@@ -208,12 +223,16 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
       frontBackReversalRatePercent: (fbReversals / total) * 100
     };
 
-    setSession((prev) => ({
-      ...prev,
-      participantId,
-      trials: logs,
-      hrtfSummary: summary
-    }));
+    setSession((prev) => {
+      const otherTrials = prev.trials.filter((t) => t.condition !== completedCond);
+      return {
+        ...prev,
+        participantId,
+        trials: [...otherTrials, ...logs],
+        hrtfSummary: completedCond === '3D_HRTF' ? summary : prev.hrtfSummary,
+        stereoSummary: completedCond === 'STEREO_BASELINE' ? summary : prev.stereoSummary
+      };
+    });
   };
 
   const handleResetStudy = () => {
@@ -246,7 +265,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Activity color="var(--accent-cyan)" size={20} />
             <h2 style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>
-              HCI Empirical Evaluation: 3D Audio Reaction Study
+              HCI Empirical Evaluation: 3D Audio Reaction & A/B Study
             </h2>
           </div>
           <button className="btn" onClick={handleCloseModal} style={{ padding: 4 }}>
@@ -258,7 +277,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
           {state === 'IDLE' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                This test evaluates human auditory spatial localization accuracy, reaction time (ms), and front-back confusion over 10 randomized trials.
+                Evaluates human auditory spatial localization accuracy, reaction time (ms), and front-back confusion over 10 randomized trials across 3D HRTF and Stereo Baseline conditions.
               </p>
 
               <div className="telemetry-grid">
@@ -297,8 +316,12 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
                       cursor: 'pointer'
                     }}
                   >
-                    <option value="3D_HRTF" style={{ background: '#0d121d' }}>3D HRTF (Proposed System)</option>
-                    <option value="STEREO_BASELINE" style={{ background: '#0d121d' }}>Stereo Baseline (Conventional)</option>
+                    <option value="3D_HRTF" style={{ background: '#0d121d' }}>
+                      Condition B: 3D HRTF + Pinna Filter (Proposed)
+                    </option>
+                    <option value="STEREO_BASELINE" style={{ background: '#0d121d' }}>
+                      Condition A: Stereo Baseline (Conventional)
+                    </option>
                   </select>
                 </div>
               </div>
@@ -306,44 +329,85 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
               <div className="survey-item">
                 <div className="survey-question">Trial Instructions:</div>
                 <ul style={{ fontSize: 11, color: 'var(--text-muted)', paddingLeft: 18, lineHeight: 1.6 }}>
-                  <li>Wear stereo headphones and set comfortable volume.</li>
-                  <li>In each trial, a 3D audio hazard cue will sound from one of the vehicle mirror zones.</li>
-                  <li>Immediately press the corresponding key or click the mirror button:</li>
+                  <li>Wear stereo headphones and set a comfortable volume.</li>
+                  <li>In each trial, an acoustic hazard cue will sound from one of the 4 vehicle zones.</li>
+                  <li>Immediately press the matching key or click the target button:</li>
                   <ul style={{ paddingLeft: 16 }}>
-                    <li><strong>A or ←</strong> : Left Side Mirror (-90°)</li>
-                    <li><strong>D or →</strong> : Right Side Mirror (+90°)</li>
-                    <li><strong>S or ↓</strong> : Rear-View Mirror (180°)</li>
-                    <li><strong>W or ↑</strong> : Forward Windshield (0°)</li>
+                    <li>
+                      <strong>Key 1 / A / ←</strong> : Left Side Mirror (-90°)
+                    </li>
+                    <li>
+                      <strong>Key 3 / D / →</strong> : Right Side Mirror (+90°)
+                    </li>
+                    <li>
+                      <strong>Key 4 / S / ↓</strong> : Rear-View Mirror (180°)
+                    </li>
+                    <li>
+                      <strong>Key 2 / W / ↑</strong> : Forward Windshield (0°)
+                    </li>
                   </ul>
                 </ul>
               </div>
 
-              <button className="btn btn-primary" onClick={startStudy} style={{ padding: '10px 16px' }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => startStudyWithCondition(condition)}
+                style={{ padding: '10px 16px' }}
+              >
                 <Play size={16} />
-                Start 10-Trial Reaction Benchmark
+                Start 10-Trial Benchmark ({condition === '3D_HRTF' ? '3D HRTF' : 'Stereo Baseline'})
               </button>
             </div>
           )}
 
           {(state === 'RUNNING_TRIAL' || state === 'WAITING_FOR_RESPONSE') && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, padding: '20px 0' }}>
-              <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>
-                Trial Progress: <span style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>{trialIndex} / 10</span>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 20,
+                padding: '20px 0'
+              }}
+            >
+              <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                Condition:{' '}
+                <strong style={{ color: '#fff' }}>
+                  {condition === '3D_HRTF' ? '3D HRTF Spatial' : 'Stereo Baseline'}
+                </strong>{' '}
+                • Trial:{' '}
+                <span style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>{trialIndex} / 10</span>
               </div>
 
-              <div style={{ fontSize: 18, fontWeight: 700, color: state === 'WAITING_FOR_RESPONSE' ? 'var(--accent-amber)' : '#fff' }}>
-                {state === 'WAITING_FOR_RESPONSE' ? '⚡ Identify Direction NOW!' : '🎧 Preparing acoustic cue...'}
+              <div
+                style={{
+                  fontSize: 18,
+                  fontWeight: 700,
+                  color: state === 'WAITING_FOR_RESPONSE' ? 'var(--accent-amber)' : '#fff'
+                }}
+              >
+                {state === 'WAITING_FOR_RESPONSE'
+                  ? '⚡ Identify Hazard Direction NOW!'
+                  : '🎧 Preparing acoustic stimulus...'}
               </div>
 
               {/* Direction Response Buttons */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, width: '100%', maxWidth: 440 }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: 12,
+                  width: '100%',
+                  maxWidth: 460
+                }}
+              >
                 <button
                   className="btn btn-accent"
                   disabled={state !== 'WAITING_FOR_RESPONSE'}
                   onClick={() => handleUserResponse('LEFT_MIRROR')}
                   style={{ height: 50, fontSize: 13 }}
                 >
-                  Left Mirror (A / ←)
+                  ◀ Left Mirror (1 / A / ←)
                 </button>
                 <button
                   className="btn btn-accent"
@@ -351,7 +415,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
                   onClick={() => handleUserResponse('RIGHT_MIRROR')}
                   style={{ height: 50, fontSize: 13 }}
                 >
-                  Right Mirror (D / →)
+                  Right Mirror (3 / D / →) ▶
                 </button>
                 <button
                   className="btn btn-accent"
@@ -359,7 +423,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
                   onClick={() => handleUserResponse('REAR_MIRROR')}
                   style={{ height: 50, fontSize: 13 }}
                 >
-                  Rear Mirror (S / ↓)
+                  ▼ Rear Mirror (4 / S / ↓)
                 </button>
                 <button
                   className="btn btn-accent"
@@ -367,7 +431,7 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
                   onClick={() => handleUserResponse('FRONT_WINDSHIELD')}
                   style={{ height: 50, fontSize: 13 }}
                 >
-                  Forward Windshield (W / ↑)
+                  ▲ Forward Windshield (2 / W / ↑)
                 </button>
               </div>
             </div>
@@ -376,7 +440,9 @@ export const EvaluationModal: React.FC<EvaluationModalProps> = ({
           {state === 'FINISHED' && (
             <StudyResultsView
               session={session}
+              activeCondition={condition}
               onResetStudy={handleResetStudy}
+              onRunCounterpart={(counterpartCond) => startStudyWithCondition(counterpartCond)}
               onOpenSUS={() => setShowSUS(true)}
               onOpenNASA={() => setShowNASA(true)}
             />
