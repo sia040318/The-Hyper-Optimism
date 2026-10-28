@@ -368,9 +368,10 @@ export class InBrowserVisionService {
     }
 
     // Invert Yaw so that Driver turning to their LEFT is NEGATIVE and RIGHT is POSITIVE
-    // This matches the Python cv_mediapipe_template and SpatialAudioEngine convention!
+    // Invert Pitch so that Driver looking UP is POSITIVE and DOWN is NEGATIVE
+    // This matches the Python cv_mediapipe_template, Three.js camera, and SpatialAudioEngine convention!
     const canonicalYaw = -rawYaw;
-    const canonicalPitch = rawPitch;
+    const canonicalPitch = -rawPitch;
     const canonicalRoll = rawRoll;
 
     // Exponential smoothing filter (alpha = 0.40) to eliminate high-frequency jitter
