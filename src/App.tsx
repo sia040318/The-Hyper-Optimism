@@ -424,7 +424,7 @@ export const App: React.FC = () => {
                 : {
                     display: showGameView ? 'flex' : 'none',
                     flex: stageView === 'SPLIT' ? 1.25 : 1,
-                    minHeight: stageView === 'SPLIT' ? '260px' : '380px',
+                    minHeight: stageView === 'SPLIT' ? '220px' : '300px',
                     width: '100%',
                     borderRadius: '10px',
                     overflow: 'hidden',
@@ -510,7 +510,7 @@ export const App: React.FC = () => {
 
           {/* 2D Tactical Radar */}
           {(stageView === '2D_RADAR' || stageView === 'SPLIT') && (
-            <div style={{ flex: 1, minHeight: '220px', display: 'flex' }}>
+            <div style={{ flex: 1, minHeight: '180px', display: 'flex', width: '100%' }}>
               <RadarCanvas
                 threats={threats}
                 currentGaze={currentGaze}

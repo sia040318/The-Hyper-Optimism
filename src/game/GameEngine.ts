@@ -191,6 +191,11 @@ export class GameEngine {
   // Audio synthesis for crashes
   private audioCtx: AudioContext | null = null;
 
+  // Responsive layout tracking
+  private resizeObserver: ResizeObserver | null = null;
+  private lastRenderW: number = 0;
+  private lastRenderH: number = 0;
+
   private handleBlur = () => {
     this.keysPressed = {};
   };
@@ -1470,12 +1475,34 @@ export class GameEngine {
   // --- PUBLIC API ---
   public mount(element: HTMLElement) {
     this.container = element;
+
+    // Explicitly enforce 100% bounds on canvas element to prevent Retina scaling overflow
+    this.renderer.domElement.style.width = '100%';
+    this.renderer.domElement.style.height = '100%';
+    this.renderer.domElement.style.display = 'block';
+    this.renderer.domElement.style.position = 'absolute';
+    this.renderer.domElement.style.top = '0';
+    this.renderer.domElement.style.left = '0';
+
     this.container.appendChild(this.renderer.domElement);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => {
+        this.handleResize();
+      });
+      this.resizeObserver.observe(this.container);
+    }
+
     this.handleResize();
   }
 
   public unmount() {
     this.pause();
+
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
 
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyDown);
@@ -1613,7 +1640,14 @@ export class GameEngine {
     const h = this.container.clientHeight;
     if (w <= 0 || h <= 0) return;
 
-    this.renderer.setSize(w, h, false);
+    this.lastRenderW = w;
+    this.lastRenderH = h;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.setSize(w, h, true);
+    this.renderer.domElement.style.width = '100%';
+    this.renderer.domElement.style.height = '100%';
 
     const aspect = w / h;
     this.mainCamera.aspect = aspect;
@@ -2119,7 +2153,12 @@ export class GameEngine {
 
     // 11. Render Scene with Multi-Viewport Mirrors
     if (this.container && this.container.clientWidth > 0 && this.container.clientHeight > 0) {
-      this.renderScene(this.container.clientWidth, this.container.clientHeight);
+      const curW = this.container.clientWidth;
+      const curH = this.container.clientHeight;
+      if (Math.abs(curW - this.lastRenderW) > 1 || Math.abs(curH - this.lastRenderH) > 1) {
+        this.handleResize();
+      }
+      this.renderScene(curW, curH);
     }
   };
 }

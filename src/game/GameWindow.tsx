@@ -371,7 +371,7 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
         }}
       >
         {/* Three.js Canvas Container */}
-        <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+        <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'absolute', inset: 0, overflow: 'hidden' }} />
 
         {/* Interactive Sculpted Automotive Mirror Frames matching WebGL Scissor Viewports */}
         {renderMirrorBezel('rear', 'REAR_MIRROR', 'REAR-VIEW MIRROR', '4', mirrorRects.rear, true)}
