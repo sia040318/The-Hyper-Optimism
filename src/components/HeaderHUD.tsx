@@ -24,10 +24,10 @@ export const HeaderHUD: React.FC<HeaderHUDProps> = ({
   return (
     <header className="hud-header">
       <div className="brand-section">
-        <span className="brand-badge">ADAS HCI</span>
+        <span className="brand-badge">AURA DRIVE</span>
         <div>
-          <h1 className="brand-title">Spatial-to-Visual Proxy Cockpit</h1>
-          <p className="brand-subtitle">3D HRTF Binaural ADAS Alert & Closed-Loop Gaze Cancellation</p>
+          <h1 className="brand-title">AURA Drive Cockpit</h1>
+          <p className="brand-subtitle">Gaze-Contingent 3D Spatial Audio ADAS</p>
         </div>
       </div>
 

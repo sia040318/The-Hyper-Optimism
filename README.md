@@ -1,4 +1,4 @@
-# Gaze-Contingent 3D Spatial Audio ADAS ("The Hyper Optimism")
+# AURA Drive: Gaze-Contingent 3D Spatial Audio ADAS
 
 [![React 19](https://img.shields.io/badge/Frontend-React%2019%20%2B%20TypeScript-61dafb.svg)](https://react.dev/)
 [![Vite 6](https://img.shields.io/badge/Bundler-Vite%206-646cff.svg)](https://vitejs.dev/)
