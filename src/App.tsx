@@ -12,7 +12,7 @@ import { SpatialAudioEngine } from './audio/SpatialAudioEngine';
 import { CVBridgeService } from './services/CVBridgeService';
 import { CarlaBridgeService } from './services/CarlaBridgeService';
 import { inBrowserVision } from './services/InBrowserVisionService';
-import { GameWindow, GameWindowHandle, TrafficEvent } from './game';
+import { GameWindow, GameWindowHandle, TrafficEvent, HUDStats } from './game';
 
 import { ThreatObstacle, ScenarioType, ProxyTarget } from './types/threats';
 import { GazeZone, HeadPose, InputMode } from './types/gaze';
@@ -135,6 +135,13 @@ export const App: React.FC = () => {
       }
     },
     [stageView, isGameFullscreen]
+  );
+
+  const handleHUDUpdate = useCallback(
+    (stats: HUDStats) => {
+      audioEngine.setAmbientSpeed(stats.speedKmh);
+    },
+    [audioEngine]
   );
 
   // Synchronize gaze with game window mirror check acknowledgment
@@ -500,6 +507,7 @@ export const App: React.FC = () => {
               ref={gameWindowRef}
               onTrafficEvent={handleTrafficEvent}
               onThreatsUpdate={handleGameThreatsUpdate}
+              onHUDUpdate={handleHUDUpdate}
               driverGaze={currentGaze}
               isSilenced={isSilenced}
               isFullscreenMode={isGameFullscreen}
