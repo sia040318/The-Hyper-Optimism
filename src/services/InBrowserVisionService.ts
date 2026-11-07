@@ -445,17 +445,12 @@ export class InBrowserVisionService {
       return 'REAR_MIRROR';
     }
 
-    // 2. Left Side Mirror Check (Turn head left or eye glance left)
-    const isHeadLeft = yawDeg <= -18.0;
-    const isGlanceLeft = yawDeg <= -10.0 && irisRatio !== null && irisRatio <= 0.40;
-    if (isHeadLeft || isGlanceLeft) {
+    // Side gaze is determined by the eyes independently of head orientation.
+    if (irisRatio !== null && irisRatio <= 0.45) {
       return 'LEFT_MIRROR';
     }
 
-    // 3. Right Side Mirror Check (Turn head right or eye glance right)
-    const isHeadRight = yawDeg >= 18.0;
-    const isGlanceRight = yawDeg >= 10.0 && irisRatio !== null && irisRatio >= 0.60;
-    if (isHeadRight || isGlanceRight) {
+    if (irisRatio !== null && irisRatio >= 0.55) {
       return 'RIGHT_MIRROR';
     }
 
