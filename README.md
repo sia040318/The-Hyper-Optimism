@@ -122,7 +122,7 @@ For collaborators working on the Computer Vision model:
    python cv_bridge/cv_mediapipe_template.py
    ```
    *(Or run `python cv_bridge/mock_cv_streamer.py` to test with simulated camera telemetry)*.
-3. The Cockpit HUD will automatically switch from `Simulation Mode` to **`● Live MediaPipe`**, displaying live head yaw/pitch angles and muting alerts based on real driver head turns!
+3. The Cockpit HUD will automatically switch from `Simulation Mode` to **`● Live MediaPipe`**, using iris landmarks for left/right gaze and showing head yaw/pitch as diagnostic telemetry.
 4. See **[cv_bridge/README_CV_TEAM.md](file:///d:/Desktop%2030_10_24/KNU_ACADEMICS/Fall%202026/HCI/Project/The-Hyper-Optimism/cv_bridge/README_CV_TEAM.md)** for full protocol specifications.
 
 ---
