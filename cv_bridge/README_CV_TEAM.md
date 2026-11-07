@@ -48,24 +48,16 @@ Whenever your model estimates a new head pose / gaze state, emit a JSON message 
 
 ---
 
-## 📐 Recommended Gaze Zone Classification Thresholds
+## 📐 Gaze Zone Classification
 
-Using 3D head pose estimation (`cv2.solvePnP`) with MediaPipe Face Mesh:
+The streamer uses the iris landmarks from MediaPipe Face Mesh (`refine_landmarks=True`) for horizontal eye gaze. The ratio is normalized to the driver's mirrored view: `0.0` is left, `0.5` is center, and `1.0` is right.
 
-```
-                          REAR-VIEW MIRROR
-                   [ Pitch >= +14°, |Yaw| <= 15° ]
-                                 ▲
-                                 │
-     LEFT MIRROR                 │                 RIGHT MIRROR
-  [ Yaw <= -20° ]      ◄─── CENTER (ROAD) ───►    [ Yaw >= +20° ]
-                       [ |Yaw| < 20°, Pitch < 14° ]
-```
+* **`LEFT_MIRROR`:** iris ratio `<= 0.45`.
+* **`CENTER`:** iris ratio between `0.45` and `0.55`.
+* **`RIGHT_MIRROR`:** iris ratio `>= 0.55`.
+* **`REAR_MIRROR`:** head pitch `>= +14°` while `|Yaw| <= 18°`; horizontal iris position alone cannot distinguish an upward glance.
 
-* **`CENTER` (Forward Road Focus):** $-20^\circ < \text{Yaw} < +20^\circ$ and $-12^\circ < \text{Pitch} < +14^\circ$.
-* **`LEFT_MIRROR`:** $\text{Yaw} \le -20^\circ$ (Driver turned head to the left mirror).
-* **`RIGHT_MIRROR`:** $\text{Yaw} \ge +20^\circ$ (Driver turned head to the right mirror).
-* **`REAR_MIRROR`:** $\text{Pitch} \ge +14^\circ$ and $|\text{Yaw}| \le 18^\circ$ (Driver looking up/center at rear-view mirror).
+Head yaw/pitch are also included as diagnostic telemetry. Dwell time is measured for the resulting gaze zone before each update is streamed.
 
 > [!TIP]
 > **Dwell Time Filtering (Crucial for HCI Evaluation):**  
@@ -87,4 +79,4 @@ We have provided a plug-and-play Python template:
    python cv_bridge/cv_mediapipe_template.py
    ```
 
-3. Open the React Cockpit in your browser. The status badge will turn **🟢 CV Stream Connected** and live head pose angles will appear in the telemetry HUD!
+3. Open the React Cockpit in your browser. The status badge will turn **🟢 CV Stream Connected**; iris ratio drives left/right mirror gaze, while head pose angles remain visible as diagnostic telemetry.
