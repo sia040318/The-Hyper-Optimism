@@ -11,6 +11,15 @@ export class SpatialAudioEngine {
   private earlyDelay2: DelayNode | null = null;
   private earlyReflectionGain: GainNode | null = null;
 
+  // Ambient nodes
+  private engineOsc1: OscillatorNode | null = null;
+  private engineOsc2: OscillatorNode | null = null;
+  private engineFilter: BiquadFilterNode | null = null;
+  private engineGain: GainNode | null = null;
+  private noiseSource: AudioBufferSourceNode | null = null;
+  private noiseFilter: BiquadFilterNode | null = null;
+  private noiseGain: GainNode | null = null;
+
   // Configuration
   private config: AudioEngineConfig = {
     panningModel: 'HRTF',
@@ -74,6 +83,7 @@ export class SpatialAudioEngine {
       this.masterGain.gain.setValueAtTime(this.config.masterVolume, this.ctx.currentTime);
     }
     this.isAudioActive = true;
+    this.startAmbient();
     this.startPulseScheduler();
     return true;
   }
@@ -81,8 +91,133 @@ export class SpatialAudioEngine {
   public stop() {
     this.isAudioActive = false;
     this.stopPulseScheduler();
+    this.stopAmbient();
     if (this.masterGain && this.ctx) {
       this.masterGain.gain.setValueAtTime(0, this.ctx.currentTime);
+    }
+  }
+
+  public startAmbient() {
+    if (!this.ctx || !this.masterGain) return;
+    this.stopAmbient();
+
+    const t = this.ctx.currentTime;
+
+    // Engine: two sawtooth oscillators (base 38 Hz and double that) through a lowpass filter at 220 Hz, with gain 0.05
+    this.engineOsc1 = this.ctx.createOscillator();
+    this.engineOsc1.type = 'sawtooth';
+    this.engineOsc1.frequency.setValueAtTime(38, t);
+
+    this.engineOsc2 = this.ctx.createOscillator();
+    this.engineOsc2.type = 'sawtooth';
+    this.engineOsc2.frequency.setValueAtTime(76, t);
+
+    this.engineFilter = this.ctx.createBiquadFilter();
+    this.engineFilter.type = 'lowpass';
+    this.engineFilter.frequency.setValueAtTime(220, t);
+
+    this.engineGain = this.ctx.createGain();
+    this.engineGain.gain.setValueAtTime(0.05, t);
+
+    this.engineOsc1.connect(this.engineFilter);
+    this.engineOsc2.connect(this.engineFilter);
+    this.engineFilter.connect(this.engineGain);
+    this.engineGain.connect(this.masterGain);
+
+    this.engineOsc1.start(t);
+    this.engineOsc2.start(t);
+
+    // Road/wind noise: looping white noise from a 2-second buffer through a lowpass filter starting at 400 Hz, with gain 0.02
+    const bufferSize = this.ctx.sampleRate * 2;
+    const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+
+    this.noiseSource = this.ctx.createBufferSource();
+    this.noiseSource.buffer = noiseBuffer;
+    this.noiseSource.loop = true;
+
+    this.noiseFilter = this.ctx.createBiquadFilter();
+    this.noiseFilter.type = 'lowpass';
+    this.noiseFilter.frequency.setValueAtTime(400, t);
+
+    this.noiseGain = this.ctx.createGain();
+    this.noiseGain.gain.setValueAtTime(0.02, t);
+
+    this.noiseSource.connect(this.noiseFilter);
+    this.noiseFilter.connect(this.noiseGain);
+    this.noiseGain.connect(this.masterGain);
+
+    this.noiseSource.start(t);
+  }
+
+  public setAmbientSpeed(kmh: number) {
+    if (!this.ctx) return;
+    const speed = Math.max(0, Math.min(180, kmh));
+    const t = this.ctx.currentTime;
+    const enginePitch = 38 + speed * 0.45;
+
+    if (this.engineOsc1) {
+      this.engineOsc1.frequency.setTargetAtTime(enginePitch, t, 0.05);
+    }
+    if (this.engineOsc2) {
+      this.engineOsc2.frequency.setTargetAtTime(enginePitch * 2, t, 0.05);
+    }
+    if (this.noiseFilter) {
+      this.noiseFilter.frequency.setTargetAtTime(400 + speed * 8, t, 0.05);
+    }
+    if (this.noiseGain) {
+      this.noiseGain.gain.setTargetAtTime(0.02 + speed * 0.0005, t, 0.05);
+    }
+  }
+
+  public stopAmbient() {
+    if (this.engineOsc1) {
+      try {
+        this.engineOsc1.stop();
+        this.engineOsc1.disconnect();
+      } catch {}
+      this.engineOsc1 = null;
+    }
+    if (this.engineOsc2) {
+      try {
+        this.engineOsc2.stop();
+        this.engineOsc2.disconnect();
+      } catch {}
+      this.engineOsc2 = null;
+    }
+    if (this.engineFilter) {
+      try {
+        this.engineFilter.disconnect();
+      } catch {}
+      this.engineFilter = null;
+    }
+    if (this.engineGain) {
+      try {
+        this.engineGain.disconnect();
+      } catch {}
+      this.engineGain = null;
+    }
+    if (this.noiseSource) {
+      try {
+        this.noiseSource.stop();
+        this.noiseSource.disconnect();
+      } catch {}
+      this.noiseSource = null;
+    }
+    if (this.noiseFilter) {
+      try {
+        this.noiseFilter.disconnect();
+      } catch {}
+      this.noiseFilter = null;
+    }
+    if (this.noiseGain) {
+      try {
+        this.noiseGain.disconnect();
+      } catch {}
+      this.noiseGain = null;
     }
   }
 
