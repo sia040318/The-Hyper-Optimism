@@ -71,7 +71,7 @@ export const App: React.FC = () => {
       setHeadPose(msg.head_pose);
       setInputMode(mode);
       setIsCvConnected(cvBridge.getIsConnected());
-      setIrisRatio(null);
+      setIrisRatio(msg.iris_ratio ?? null);
 
       audioEngine.updateHeadOrientation(msg.head_pose);
       audioEngine.setGazeZone(msg.gaze_zone);
