@@ -7,6 +7,8 @@ import { ScenarioPanel } from './components/ScenarioPanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
 import { DriverCameraPIP } from './components/DriverCameraPIP';
 import { EvaluationModal } from './components/evaluation/EvaluationModal';
+import { StudyOrchestrator, StudyVisualMode } from './components/evaluation/StudyOrchestrator';
+import { AdminDashboard } from './components/admin/AdminDashboard';
 
 import { SpatialAudioEngine } from './audio/SpatialAudioEngine';
 import { CVBridgeService } from './services/CVBridgeService';
@@ -40,6 +42,24 @@ export const App: React.FC = () => {
   const [panningModel, setPanningModel] = useState<PanningModel>('HRTF');
   const [soundType, setSoundType] = useState<SoundType>('chime');
   const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
+
+  // Empirical Study Orchestrator & Hidden Admin Portal Routing
+  const initialQuery = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    const studyParam = params.get('study');
+    const pidParam = params.get('pid');
+    const adminParam = params.get('admin');
+    return {
+      openStudy: Boolean(studyParam),
+      passcode: studyParam || undefined,
+      pid: pidParam || undefined,
+      openAdmin: adminParam === '1' || adminParam === 'true'
+    };
+  }, []);
+
+  const [isOrchestratorOpen, setIsOrchestratorOpen] = useState(initialQuery.openStudy);
+  const [isAdminOpen, setIsAdminOpen] = useState(initialQuery.openAdmin);
+  const [studyVisualMode, setStudyVisualMode] = useState<StudyVisualMode>('OFF');
   const [stageView, setStageView] = useState<'3D_GAME' | '2D_RADAR' | 'SPLIT'>('3D_GAME');
   const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const gameWindowRef = useRef<GameWindowHandle>(null);
@@ -107,14 +127,16 @@ export const App: React.FC = () => {
     }
   };
 
-  // Update audio engine when primary threat changes
+  // Update audio engine when primary threat changes (sandbox/demo mode only)
   useEffect(() => {
+    if (isOrchestratorOpen) return;
     audioEngine.setThreat(primaryThreat);
-  }, [primaryThreat, audioEngine]);
+  }, [primaryThreat, audioEngine, isOrchestratorOpen]);
 
   // Traffic Event Handler from Three.js Game Engine
   const handleTrafficEvent = useCallback(
     (event: TrafficEvent) => {
+      if (isOrchestratorOpen) return;
       let target: ProxyTarget = 'FRONT_WINDSHIELD';
       if (event.side === 'left') target = 'LEFT_MIRROR';
       else if (event.side === 'right') target = 'RIGHT_MIRROR';
@@ -124,17 +146,18 @@ export const App: React.FC = () => {
         audioEngine.testDirection(target);
       }
     },
-    [isAudioActive, audioEngine]
+    [isAudioActive, audioEngine, isOrchestratorOpen]
   );
 
   // Live Threats Stream from 3D GameEngine (keeps 2D Radar & 3D HRTF Audio synced with 3D Traffic!)
   const handleGameThreatsUpdate = useCallback(
     (gameThreats: ThreatObstacle[]) => {
+      if (isOrchestratorOpen) return;
       if (stageView === '3D_GAME' || stageView === 'SPLIT' || isGameFullscreen) {
         setThreats(gameThreats);
       }
     },
-    [stageView, isGameFullscreen]
+    [stageView, isGameFullscreen, isOrchestratorOpen]
   );
 
   const handleHUDUpdate = useCallback(
@@ -160,19 +183,25 @@ export const App: React.FC = () => {
     gameWindowRef.current?.updateDriverHeadPose(headPose.yaw, headPose.pitch);
   }, [headPose]);
 
-  // Global Keyboard Shortcuts (1, 2, 3, 4 for Gaze, C for Camera, Esc for Fullscreen exit)
+  // Global Keyboard Shortcuts (Ctrl+Shift+A for Admin Portal, 1/2/3/4 for Gaze, C for Camera, Esc for Fullscreen)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+        e.preventDefault();
+        setIsAdminOpen((prev) => !prev);
+        return;
+      }
+
       if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'SELECT') {
         return;
       }
 
-      if (e.key === 'Escape' && isGameFullscreen) {
+      if (e.key === 'Escape' && isGameFullscreen && !isOrchestratorOpen) {
         setIsGameFullscreen(false);
         return;
       }
 
-      if (isStudyModalOpen) return;
+      if (isStudyModalOpen || isOrchestratorOpen || isAdminOpen) return;
 
       if (e.key === '1') {
         e.preventDefault();
@@ -193,7 +222,7 @@ export const App: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cvBridge, isGameFullscreen, isStudyModalOpen]);
+  }, [cvBridge, isGameFullscreen, isStudyModalOpen, isOrchestratorOpen, isAdminOpen]);
 
   // Continuous physics animation loop ONLY when in standalone 2D_RADAR mode
   useEffect(() => {
@@ -306,16 +335,20 @@ export const App: React.FC = () => {
   };
 
   const handleSimulateGaze = useCallback(
-    (zone: GazeZone) => {
+    (zone: GazeZone, force = false) => {
       if (!inBrowserVision.getIsRunning()) {
         cvBridge.simulateGaze(zone);
+      } else if (force) {
+        setCurrentGaze(zone);
+        audioEngine.setGazeZone(zone);
       }
     },
-    [cvBridge]
+    [cvBridge, audioEngine]
   );
 
   const isSilenced = audioEngine.getIsCancelled();
-  const showGameView = stageView === '3D_GAME' || stageView === 'SPLIT' || isGameFullscreen;
+  const isStudyHighwayActive = isOrchestratorOpen && studyVisualMode !== 'OFF';
+  const showGameView = stageView === '3D_GAME' || stageView === 'SPLIT' || isGameFullscreen || isStudyHighwayActive;
 
   return (
     <div className="app-container">
@@ -326,7 +359,7 @@ export const App: React.FC = () => {
         cvMode={inputMode}
         isCvConnected={isCvConnected}
         isCarlaConnected={isCarlaConnected}
-        onOpenStudy={() => setIsStudyModalOpen(true)}
+        onOpenStudy={() => setIsOrchestratorOpen(true)}
         onLaunchGame={() => setIsGameFullscreen(true)}
       />
 
@@ -416,14 +449,14 @@ export const App: React.FC = () => {
             onSelectGaze={handleSimulateGaze}
           />
 
-          {/* Single Persistent 3D Game Window (Expands seamlessly to Fullscreen when toggled!) */}
+          {/* Single Persistent 3D Game Window (Expands seamlessly to Fullscreen when toggled or during Empirical Study!) */}
           <div
             style={
-              isGameFullscreen
+              isGameFullscreen || isStudyHighwayActive
                 ? {
                     position: 'fixed',
                     inset: 0,
-                    zIndex: 9999,
+                    zIndex: 9998,
                     background: '#060a14',
                     display: 'flex',
                     flexDirection: 'column'
@@ -441,8 +474,8 @@ export const App: React.FC = () => {
                   }
             }
           >
-            {/* Floating Quick-Scenario Bar when in Fullscreen Mode */}
-            {isGameFullscreen && (
+            {/* Floating Quick-Scenario Bar when in Sandbox Fullscreen Mode */}
+            {isGameFullscreen && !isStudyHighwayActive && (
               <div
                 style={{
                   position: 'absolute',
@@ -511,8 +544,9 @@ export const App: React.FC = () => {
               driverGaze={currentGaze}
               isSilenced={isSilenced}
               isFullscreenMode={isGameFullscreen}
+              hideStudySpoilers={isStudyHighwayActive}
               onToggleFullscreen={() => setIsGameFullscreen((prev) => !prev)}
-              onSelectGaze={handleSimulateGaze}
+              onSelectGaze={(z) => handleSimulateGaze(z, isStudyHighwayActive)}
             />
           </div>
 
@@ -552,13 +586,37 @@ export const App: React.FC = () => {
         </aside>
       </main>
 
-      {/* HCI Evaluation Suite Modal */}
+      {/* Legacy Quick Sandbox Evaluation Modal */}
       <EvaluationModal
         isOpen={isStudyModalOpen}
         onClose={() => setIsStudyModalOpen(false)}
         audioEngine={audioEngine}
         isAudioActive={isAudioActive}
         onAudioActiveChange={setIsAudioActive}
+      />
+
+      {/* Full Empirical HCI Study Suite Orchestrator */}
+      <StudyOrchestrator
+        isOpen={isOrchestratorOpen}
+        onClose={() => {
+          setIsOrchestratorOpen(false);
+          setStudyVisualMode('OFF');
+        }}
+        initialPasscode={initialQuery.passcode}
+        initialParticipantId={initialQuery.pid}
+        audioEngine={audioEngine}
+        gameWindowRef={gameWindowRef}
+        currentGaze={currentGaze}
+        onSimulateGaze={handleSimulateGaze}
+        onAudioActiveChange={setIsAudioActive}
+        onStudyVisualModeChange={setStudyVisualMode}
+        onOpenLegacySandboxStudy={() => setIsStudyModalOpen(true)}
+      />
+
+      {/* Hidden Researcher Admin Portal (?admin=1 or Ctrl+Shift+A) */}
+      <AdminDashboard
+        isOpen={isAdminOpen}
+        onClose={() => setIsAdminOpen(false)}
       />
     </div>
   );

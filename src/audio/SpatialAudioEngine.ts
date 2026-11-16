@@ -1,6 +1,15 @@
 import { PanningModel, SoundType, AudioEngineConfig } from '../types/audio';
 import { ThreatObstacle, ProxyTarget } from '../types/threats';
 import { GazeZone, HeadPose } from '../types/gaze';
+import { createThreat } from '../utils/threatScenarios';
+
+export type StudyAudioMode =
+  | 'MONO_BASELINE'
+  | 'STEREO_BASELINE'
+  | 'SPATIAL_3D'
+  | 'TRADITIONAL_PERSISTENT'
+  | 'GAZE_CONTINGENT_3D'
+  | null;
 
 export class SpatialAudioEngine {
   private ctx: AudioContext | null = null;
@@ -35,6 +44,11 @@ export class SpatialAudioEngine {
   private currentThreat: ThreatObstacle | null = null;
   private isGazeCancelled = false;
   private currentGazeZone: GazeZone = 'CENTER';
+
+  // Empirical Study Mode State
+  private studyAudioMode: StudyAudioMode = null;
+  private isStudyTrialActive = false;
+  private beepPulseCount = 0;
 
   // Closed-loop latch state so checking a mirror silences that threat even after returning gaze to road
   private acknowledgedThreatIds: Set<string> = new Set();
@@ -270,12 +284,28 @@ export class SpatialAudioEngine {
 
   /**
    * Dynamically compensates listener orientation based on driver's head yaw and pitch.
-   * This anchors the virtual cockpit sound sources in world space!
+   * Anchors virtual cockpit sound sources in world space during 3D HRTF / demo modes.
    */
   public updateHeadOrientation(headPose: HeadPose) {
     if (!this.ctx || !this.isAudioActive) return;
     const l = this.ctx.listener;
     const t = this.ctx.currentTime;
+
+    // Non-3D study baselines keep listener fixed forward so head rotation does not introduce HRTF cues
+    if (
+      this.studyAudioMode === 'MONO_BASELINE' ||
+      this.studyAudioMode === 'STEREO_BASELINE' ||
+      this.studyAudioMode === 'TRADITIONAL_PERSISTENT'
+    ) {
+      if (l.forwardX) {
+        l.forwardX.setTargetAtTime(0, t, 0.03);
+        l.forwardY.setTargetAtTime(0, t, 0.03);
+        l.forwardZ.setTargetAtTime(-1, t, 0.03);
+      } else {
+        l.setOrientation(0, 0, -1, 0, 1, 0);
+      }
+      return;
+    }
 
     // Convert yaw to radians (yaw: right is +, left is -)
     const yawRad = (headPose.yaw * Math.PI) / 180.0;
@@ -352,6 +382,24 @@ export class SpatialAudioEngine {
     if (!this.panner || !this.ctx) return;
     const t = this.ctx.currentTime;
 
+    // Mode 1: MONO_BASELINE -> Fixed center equalpower panner, pinna notch bypassed
+    if (this.studyAudioMode === 'MONO_BASELINE') {
+      if (this.panner.positionX) {
+        this.panner.positionX.setValueAtTime(0, t);
+        this.panner.positionY.setValueAtTime(1.2, t);
+        this.panner.positionZ.setValueAtTime(-1.0, t);
+      } else {
+        this.panner.setPosition(0, 1.2, -1.0);
+      }
+      if (this.pinnaFilter) {
+        this.pinnaFilter.gain.setValueAtTime(0, t);
+      }
+      if (this.earlyReflectionGain) {
+        this.earlyReflectionGain.gain.setValueAtTime(0, t);
+      }
+      return;
+    }
+
     // Transform Vehicle Coordinates to Web Audio Listener Coordinates:
     // Vehicle: X=Lateral (Right+), Y=Longitudinal (Forward+)
     // Audio:   X=Right(+), Y=Up(+), Z=Behind(+) / Forward(-)
@@ -367,12 +415,29 @@ export class SpatialAudioEngine {
       this.panner.setPosition(audioX, audioY, audioZ);
     }
 
-    // Rear Pinna Spectral Notch Filter:
-    // Attenuate highs (>4.2 kHz) by -5.0dB when threat is in rear hemisphere (|azimuth| > 105°)
+    // Mode 2 & 4: STEREO_BASELINE / TRADITIONAL_PERSISTENT -> ILD only, pinna notch & reflections off
+    if (
+      this.studyAudioMode === 'STEREO_BASELINE' ||
+      this.studyAudioMode === 'TRADITIONAL_PERSISTENT'
+    ) {
+      if (this.pinnaFilter) {
+        this.pinnaFilter.gain.setValueAtTime(0, t);
+      }
+      if (this.earlyReflectionGain) {
+        this.earlyReflectionGain.gain.setValueAtTime(0, t);
+      }
+      return;
+    }
+
+    // Full 3D Spatial Mode (SPATIAL_3D, GAZE_CONTINGENT_3D, or Demo):
+    // Rear Pinna Spectral Notch Filter: attenuate highs (>4.2 kHz) by -5.0dB when rear (|azimuth| > 105°)
     if (this.pinnaFilter) {
       const isRear = Math.abs(azimuthDeg) > 105;
       const targetGain = isRear ? -5.0 : 1.0;
       this.pinnaFilter.gain.setTargetAtTime(targetGain, t, 0.04);
+    }
+    if (this.earlyReflectionGain) {
+      this.earlyReflectionGain.gain.setTargetAtTime(0.14, t, 0.04);
     }
   }
 
@@ -397,6 +462,17 @@ export class SpatialAudioEngine {
       return;
     }
 
+    // In Part 1 localization blocks and Part 2 Traditional Persistent control, gaze never cancels the alert
+    if (
+      this.studyAudioMode === 'MONO_BASELINE' ||
+      this.studyAudioMode === 'STEREO_BASELINE' ||
+      this.studyAudioMode === 'SPATIAL_3D' ||
+      this.studyAudioMode === 'TRADITIONAL_PERSISTENT'
+    ) {
+      this.isGazeCancelled = false;
+      return;
+    }
+
     const now = performance.now();
     const target = this.currentThreat.proxyTarget;
     const directMatch =
@@ -408,13 +484,13 @@ export class SpatialAudioEngine {
       const wasCancelled = this.isGazeCancelled;
       this.isGazeCancelled = true;
       // Latch acknowledgment for this specific vehicle ID (or 4.5s for looping scenario)
-      if (this.currentThreat.id.startsWith('car_')) {
+      if (this.currentThreat.id.startsWith('car_') || this.currentThreat.id.startsWith('study_')) {
         this.acknowledgedThreatIds.add(this.currentThreat.id);
       }
       this.latchedTarget = target;
       this.latchedUntilTimestamp = now + 4500;
 
-      if (!wasCancelled && this.isAudioActive && !this.isThreatAlertsSuspended) {
+      if (!wasCancelled && this.isAudioActive && (!this.isThreatAlertsSuspended || this.isStudyTrialActive)) {
         this.playAcknowledgeEarcon();
       }
       return;
@@ -422,7 +498,8 @@ export class SpatialAudioEngine {
 
     // Check if already latched for this vehicle or recent mirror check
     if (
-      (this.currentThreat.id.startsWith('car_') && this.acknowledgedThreatIds.has(this.currentThreat.id)) ||
+      ((this.currentThreat.id.startsWith('car_') || this.currentThreat.id.startsWith('study_')) &&
+        this.acknowledgedThreatIds.has(this.currentThreat.id)) ||
       (this.latchedTarget === target && now < this.latchedUntilTimestamp)
     ) {
       this.isGazeCancelled = true;
@@ -458,10 +535,10 @@ export class SpatialAudioEngine {
     } catch {}
   }
 
-  private startPulseScheduler() {
+  private startPulseScheduler(skipImmediatePulse = false) {
     this.stopPulseScheduler();
 
-    const loop = () => {
+    const loop = (fireNow: boolean) => {
       if (!this.isAudioActive) {
         this.pulseTimer = null;
         return;
@@ -470,8 +547,9 @@ export class SpatialAudioEngine {
       this.evaluateGazeCancellation();
 
       if (
+        fireNow &&
         this.ctx &&
-        !this.isThreatAlertsSuspended &&
+        (!this.isThreatAlertsSuspended || this.isStudyTrialActive) &&
         !this.isGazeCancelled &&
         this.currentThreat
       ) {
@@ -484,20 +562,25 @@ export class SpatialAudioEngine {
       // Compute dynamic delay based on threat distance (ISO 15006 urgency)
       let nextDelayMs = 900;
       if (this.currentThreat) {
-        const d = Math.max(2.0, Math.min(32.0, this.currentThreat.distance));
-        // Exponential urgency curve: 32m -> 780ms; 3m -> 135ms
-        const ratio = (d - 2.0) / 30.0;
-        nextDelayMs = 135 + Math.pow(ratio, 1.45) * 645;
+        if (this.studyAudioMode === 'TRADITIONAL_PERSISTENT') {
+          // Fixed traditional urgent cadence (~360ms pulse interval)
+          nextDelayMs = 360;
+        } else {
+          const d = Math.max(2.0, Math.min(32.0, this.currentThreat.distance));
+          // Exponential urgency curve: 32m -> 780ms; 3m -> 135ms
+          const ratio = (d - 2.0) / 30.0;
+          nextDelayMs = 135 + Math.pow(ratio, 1.45) * 645;
+        }
       }
 
       if (this.isAudioActive) {
-        this.pulseTimer = window.setTimeout(loop, nextDelayMs);
+        this.pulseTimer = window.setTimeout(() => loop(true), nextDelayMs);
       } else {
         this.pulseTimer = null;
       }
     };
 
-    loop();
+    loop(!skipImmediatePulse);
   }
 
   public stopPulseScheduler() {
@@ -510,21 +593,43 @@ export class SpatialAudioEngine {
   public playAlertPulse(distanceMeters = 10.0) {
     if (!this.ctx || !this.pinnaFilter || this.config.isMuted) return;
 
+    this.beepPulseCount += 1;
     const t = this.ctx.currentTime;
     const sound = this.config.soundType;
 
     // ISO 15006 Pitch Escalation: closer threats shift pitch upward up to +25%
     const clampedDist = Math.max(2.0, Math.min(30.0, distanceMeters));
     const urgencyRatio = 1.0 - (clampedDist - 2.0) / 28.0; // 0.0 (far) to 1.0 (critical)
-    const pitchMultiplier = 1.0 + urgencyRatio * 0.25;
+    const pitchMultiplier =
+      this.studyAudioMode === 'TRADITIONAL_PERSISTENT' ? 1.05 : 1.0 + urgencyRatio * 0.25;
 
-    if (sound === 'chime') {
+    if (this.studyAudioMode === 'TRADITIONAL_PERSISTENT') {
+      this.synthesizeTraditionalBeep(t);
+    } else if (sound === 'chime') {
       this.synthesizeChime(t, pitchMultiplier);
     } else if (sound === 'click_train') {
       this.synthesizeClickTrain(t, pitchMultiplier);
     } else {
       this.synthesizeSine(t, pitchMultiplier);
     }
+  }
+
+  private synthesizeTraditionalBeep(t: number) {
+    if (!this.ctx || !this.pinnaFilter) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(980, t);
+
+    gain.gain.setValueAtTime(0.001, t);
+    gain.gain.exponentialRampToValueAtTime(0.22, t + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.19);
+
+    osc.connect(gain);
+    gain.connect(this.pinnaFilter);
+
+    osc.start(t);
+    osc.stop(t + 0.2);
   }
 
   private synthesizeChime(t: number, pitchMult = 1.0) {
@@ -664,6 +769,139 @@ export class SpatialAudioEngine {
 
   public getIsCancelled(): boolean {
     return this.isGazeCancelled;
+  }
+
+  // --- EMPIRICAL STUDY MODE CONTROLS ---
+
+  public setStudyAudioMode(mode: StudyAudioMode) {
+    this.studyAudioMode = mode;
+    if (mode === 'MONO_BASELINE' || mode === 'STEREO_BASELINE' || mode === 'TRADITIONAL_PERSISTENT') {
+      this.config.panningModel = 'equalpower';
+    } else if (mode === 'SPATIAL_3D' || mode === 'GAZE_CONTINGENT_3D') {
+      this.config.panningModel = 'HRTF';
+    }
+
+    if (this.panner) {
+      this.panner.panningModel = this.config.panningModel;
+    }
+
+    if (this.ctx) {
+      const t = this.ctx.currentTime;
+      if (this.earlyReflectionGain) {
+        const reflGain =
+          mode === 'MONO_BASELINE' || mode === 'STEREO_BASELINE' || mode === 'TRADITIONAL_PERSISTENT'
+            ? 0
+            : 0.14;
+        this.earlyReflectionGain.gain.setValueAtTime(reflGain, t);
+      }
+      if (
+        this.pinnaFilter &&
+        (mode === 'MONO_BASELINE' || mode === 'STEREO_BASELINE' || mode === 'TRADITIONAL_PERSISTENT')
+      ) {
+        this.pinnaFilter.gain.setValueAtTime(0, t);
+      }
+      if (mode === 'MONO_BASELINE' || mode === 'STEREO_BASELINE' || mode === 'TRADITIONAL_PERSISTENT') {
+        this.setupListener();
+      }
+    }
+
+    this.evaluateGazeCancellation();
+  }
+
+  public getStudyAudioMode(): StudyAudioMode {
+    return this.studyAudioMode;
+  }
+
+  public resetBeepPulseCount() {
+    this.beepPulseCount = 0;
+  }
+
+  public getBeepPulseCount(): number {
+    return this.beepPulseCount;
+  }
+
+  public async playStereoChannelTest(channel: 'LEFT' | 'RIGHT') {
+    await this.init();
+    if (!this.ctx || !this.masterGain) return;
+    if (this.ctx.state === 'suspended') {
+      await this.ctx.resume();
+    }
+    this.masterGain.gain.setValueAtTime(this.config.masterVolume, this.ctx.currentTime);
+
+    const t = this.ctx.currentTime;
+    const stereoPanner = this.ctx.createStereoPanner();
+    stereoPanner.pan.setValueAtTime(channel === 'LEFT' ? -1.0 : 1.0, t);
+
+    const freqs = channel === 'LEFT' ? [659.25, 880] : [783.99, 1046.5];
+    freqs.forEach((f, idx) => {
+      const osc = this.ctx!.createOscillator();
+      const gain = this.ctx!.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(f, t + idx * 0.12);
+      gain.gain.setValueAtTime(0.0001, t + idx * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.25, t + idx * 0.12 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + idx * 0.12 + 0.22);
+
+      osc.connect(gain);
+      gain.connect(stereoPanner);
+      osc.start(t + idx * 0.12);
+      osc.stop(t + idx * 0.12 + 0.24);
+    });
+
+    stereoPanner.connect(this.masterGain);
+    setTimeout(() => {
+      try {
+        stereoPanner.disconnect();
+      } catch {}
+    }, 600);
+  }
+
+  public async triggerStudyTrialAlert(target: ProxyTarget, distanceMeters = 8.0) {
+    if (!this.isAudioActive) {
+      await this.start();
+    } else {
+      await this.init();
+    }
+    this.resetAcknowledgments();
+    this.resetBeepPulseCount();
+    this.isStudyTrialActive = true;
+
+    let x = 0;
+    let y = 12.0;
+    switch (target) {
+      case 'LEFT_MIRROR':
+        x = -4.2;
+        y = -2.5;
+        break;
+      case 'RIGHT_MIRROR':
+        x = 4.2;
+        y = -2.5;
+        break;
+      case 'REAR_MIRROR':
+        x = 0.0;
+        y = -11.5;
+        break;
+      case 'FRONT_WINDSHIELD':
+        x = 0.0;
+        y = 13.0;
+        break;
+    }
+
+    const threat = createThreat(`study_${target}_${Date.now()}`, `Study Hazard (${target})`, x, y, 0, 0, true);
+    threat.distance = distanceMeters;
+    threat.proxyTarget = target;
+    this.setThreat(threat);
+
+    // Fire t=0 onset pulse immediately and schedule follow-up pulses
+    this.playAlertPulse(distanceMeters);
+    this.startPulseScheduler(true);
+  }
+
+  public stopStudyTrialAlert() {
+    this.isStudyTrialActive = false;
+    this.currentThreat = null;
+    this.isGazeCancelled = false;
+    this.stopPulseScheduler();
   }
 
   public cleanup() {

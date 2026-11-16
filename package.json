@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && aws s3 sync dist/ s3://adas-gaze-audio-frontend-334333507672 --delete && aws cloudfront create-invalidation --distribution-id E2O6BXRO5Q08KN --paths \"/*\""
+    "deploy": "npm run build && aws s3 sync dist/ s3://adas-gaze-audio-frontend-334333507672 --delete --region ap-northeast-2 && aws cloudfront create-invalidation --distribution-id E2O6BXRO5Q08KN --paths \"/*\""
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",

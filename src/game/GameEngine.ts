@@ -118,7 +118,17 @@ export class GameEngine {
 
   // Scene entities
   private roadGroup: THREE.Group;
-  private scrollingObjects: Array<{ obj: THREE.Object3D; wrapLength: number; minZ: number; maxZ: number }> = [];
+  private scrollingObjects: Array<{
+    obj: THREE.Object3D;
+    wrapLength: number;
+    minZ: number;
+    maxZ: number;
+    baseX: number;
+  }> = [];
+  private curvedRibbons: Array<{
+    geo: THREE.BufferGeometry;
+    baseXArray: Float32Array;
+  }> = [];
   private playerCarGroup: THREE.Group;
   private cockpitInteriorGroup: THREE.Group;
   private exteriorBodyGroup: THREE.Group;
@@ -154,6 +164,8 @@ export class GameEngine {
   private playerSpeed: number = 27.78; // m/s (~100 km/h)
   private playerLateralVelocity: number = 0;
   private autoPilot: boolean = false;
+  private studyAutopilotMode: boolean = false;
+  private suppressStudyVisualAlerts: boolean = false;
   private score: number = 0;
   private streak: number = 0;
   private distanceTraveled: number = 0;
@@ -351,30 +363,89 @@ export class GameEngine {
     this.scene.add(skylineGroup);
   }
 
+  /**
+   * Parameterized highway curvature X_curve(s) along world travel coordinate s.
+   * Combines smooth long-radius S-curves (min radius >= 535 m > 450 m so sightlines remain clear).
+   */
+  private evaluateCurveX(s: number): number {
+    return 24.0 * Math.sin(0.0052 * s) + 11.0 * Math.sin(0.0105 * s + 1.15);
+  }
+
+  private evaluateCurveDerivative(s: number): number {
+    return 24.0 * 0.0052 * Math.cos(0.0052 * s) + 11.0 * 0.0105 * Math.cos(0.0105 * s + 1.15);
+  }
+
+  /** Road centerline X offset relative to the ego car's Z=0 plane */
+  public getRoadCenterX(relZ: number): number {
+    const sAtZ = this.distanceTraveled - relZ;
+    const sAtEgo = this.distanceTraveled;
+    return this.evaluateCurveX(sAtZ) - this.evaluateCurveX(sAtEgo);
+  }
+
+  /** Road derivative dx_road / dz at relative Z */
+  public getRoadSlopeDz(relZ: number): number {
+    const sAtZ = this.distanceTraveled - relZ;
+    return -this.evaluateCurveDerivative(sAtZ);
+  }
+
+  /** Road tangent heading theta_road(z) = arctan(dx_road / dz) */
+  public getRoadYaw(relZ: number): number {
+    return Math.atan(this.getRoadSlopeDz(relZ));
+  }
+
+  private registerCurvedRibbon(geo: THREE.BufferGeometry) {
+    const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+    const baseXArray = new Float32Array(posAttr.count);
+    for (let i = 0; i < posAttr.count; i++) {
+      baseXArray[i] = posAttr.getX(i);
+    }
+    this.curvedRibbons.push({ geo, baseXArray });
+  }
+
+  private updateCurvedRibbons() {
+    for (let r = 0; r < this.curvedRibbons.length; r++) {
+      const ribbon = this.curvedRibbons[r];
+      const posAttr = ribbon.geo.getAttribute('position') as THREE.BufferAttribute;
+      const baseX = ribbon.baseXArray;
+      for (let i = 0; i < posAttr.count; i++) {
+        const z = posAttr.getZ(i);
+        posAttr.setX(i, baseX[i] + this.getRoadCenterX(z));
+      }
+      posAttr.needsUpdate = true;
+    }
+  }
+
   private registerScrolling(obj: THREE.Object3D, minZ: number, maxZ: number) {
     this.scrollingObjects.push({
       obj,
       wrapLength: maxZ - minZ,
       minZ,
-      maxZ
+      maxZ,
+      baseX: obj.position.x
     });
   }
 
-  // --- ENVIRONMENT & 4-LANE HIGHWAY ---
+  // --- ENVIRONMENT & 4-LANE CURVED HIGHWAY ---
   private createEnvironment(): THREE.Group {
     const group = new THREE.Group();
     this.scrollingObjects = [];
+    this.curvedRibbons = [];
 
-    // 1. Continuous Infinite-Look Asphalt Roadway (4 Lanes = 16m + shoulders = 18.4m wide, 900m long)
-    const roadGeo = new THREE.PlaneGeometry(18.4, 900);
+    const ribbonLen = 620;
+    const ribbonCenterZ = -180;
+    const ribbonSegs = 155;
+
+    // 1. Continuous Curved Asphalt Roadway (4 Lanes = 16m + shoulders = 18.4m wide)
+    const roadGeo = new THREE.PlaneGeometry(18.4, ribbonLen, 1, ribbonSegs);
+    roadGeo.rotateX(-Math.PI / 2);
+    roadGeo.translate(0, 0, ribbonCenterZ);
+    this.registerCurvedRibbon(roadGeo);
     const roadMat = new THREE.MeshStandardMaterial({
       color: 0x161922,
       roughness: 0.78,
       metalness: 0.18
     });
     const road = new THREE.Mesh(roadGeo, roadMat);
-    road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0, -250);
     group.add(road);
 
     // Subtle darker asphalt wear tracks in the 4 lane centers (-6, -2, +2, +6)
@@ -384,42 +455,49 @@ export class GameEngine {
       metalness: 0.22
     });
     LANE_CENTERS.forEach((cx) => {
-      const track = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 900), trackMat);
-      track.rotation.x = -Math.PI / 2;
-      track.position.set(cx, 0.005, -250);
+      const trackGeo = new THREE.PlaneGeometry(2.2, ribbonLen, 1, ribbonSegs);
+      trackGeo.rotateX(-Math.PI / 2);
+      trackGeo.translate(cx, 0.005, ribbonCenterZ);
+      this.registerCurvedRibbon(trackGeo);
+      const track = new THREE.Mesh(trackGeo, trackMat);
       group.add(track);
     });
 
-    // 2. Continuous Yellow Outer Shoulder Lines (x = -8.0, +8.0) - NEVER teleport!
+    // 2. Continuous Yellow Outer Shoulder Lines (x = -8.0, +8.0)
     const yellowLineMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24 });
     [-8.0, 8.0].forEach((sx) => {
-      const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 900), yellowLineMat);
-      shoulder.rotation.x = -Math.PI / 2;
-      shoulder.position.set(sx, 0.015, -250);
+      const shoulderGeo = new THREE.PlaneGeometry(0.22, ribbonLen, 1, ribbonSegs);
+      shoulderGeo.rotateX(-Math.PI / 2);
+      shoulderGeo.translate(sx, 0.015, ribbonCenterZ);
+      this.registerCurvedRibbon(shoulderGeo);
+      const shoulder = new THREE.Mesh(shoulderGeo, yellowLineMat);
       group.add(shoulder);
     });
 
-    // 3. Continuous Double Metal Guardrails (x = -8.8, +8.8) - Static continuous rails!
+    // 3. Continuous Double Metal Guardrails (x = -8.8, +8.8)
     const railMat = new THREE.MeshStandardMaterial({
       color: 0x94a3b8,
       metalness: 0.85,
       roughness: 0.28
     });
     [-8.8, 8.8].forEach((gx) => {
-      const upperRail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.28, 900), railMat);
-      upperRail.position.set(gx, 0.68, -250);
-      group.add(upperRail);
+      const upperGeo = new THREE.BoxGeometry(0.18, 0.28, ribbonLen, 1, 1, ribbonSegs);
+      upperGeo.translate(gx, 0.68, ribbonCenterZ);
+      this.registerCurvedRibbon(upperGeo);
+      group.add(new THREE.Mesh(upperGeo, railMat));
 
-      const lowerRail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.2, 900), railMat);
-      lowerRail.position.set(gx, 0.34, -250);
-      group.add(lowerRail);
+      const lowerGeo = new THREE.BoxGeometry(0.18, 0.2, ribbonLen, 1, 1, ribbonSegs);
+      lowerGeo.translate(gx, 0.34, ribbonCenterZ);
+      this.registerCurvedRibbon(lowerGeo);
+      group.add(new THREE.Mesh(lowerGeo, railMat));
     });
 
     // 4. Scrolling Dashed Lane Dividers & Cat's-Eye Reflectors (Lanes separated at x = -4, 0, +4)
-    const minScrollZ = -220;
-    const maxScrollZ = 80;
+    const minScrollZ = -260;
+    const maxScrollZ = 90;
     const stepZ = 10;
     const dashGeo = new THREE.PlaneGeometry(0.16, 4.0);
+    dashGeo.rotateX(-Math.PI / 2);
     const dashMat = new THREE.MeshBasicMaterial({ color: 0xe2e8f0 });
     const centerDashMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
     const studGeo = new THREE.BoxGeometry(0.14, 0.04, 0.22);
@@ -428,7 +506,6 @@ export class GameEngine {
     [-4.0, 0.0, 4.0].forEach((lx) => {
       for (let z = minScrollZ; z < maxScrollZ; z += stepZ) {
         const dash = new THREE.Mesh(dashGeo, lx === 0 ? centerDashMat : dashMat);
-        dash.rotation.x = -Math.PI / 2;
         dash.position.set(lx, 0.018, z);
         group.add(dash);
         this.registerScrolling(dash, minScrollZ, maxScrollZ);
@@ -502,16 +579,16 @@ export class GameEngine {
     }
 
     // 7. Scrolling Overhead Electronic Highway Gantries
-    const gantry1 = this.createOverheadGantry(-55, 'KNU HCI ADAS LAB • 3D HRTF SPATIAL AUDIO', 'LANES 1-4 MONITORED • GAZE CANCELLATION ACTIVE');
+    const gantry1 = this.createOverheadGantry(-65, 'KNU HCI ADAS LAB • 3D HRTF SPATIAL AUDIO', 'LANES 1-4 MONITORED • GAZE CANCELLATION ACTIVE');
     group.add(gantry1);
     this.registerScrolling(gantry1, minScrollZ, maxScrollZ);
 
-    const gantry2 = this.createOverheadGantry(-175, 'CLOSED-LOOP DRIVER MONITORING ZONE', 'CHECK MIRRORS ON AUDIO CUE TO SILENCE ALERT');
+    const gantry2 = this.createOverheadGantry(-215, 'CLOSED-LOOP DRIVER MONITORING ZONE', 'CHECK MIRRORS ON AUDIO CUE TO SILENCE ALERT');
     group.add(gantry2);
     this.registerScrolling(gantry2, minScrollZ, maxScrollZ);
 
-    // 8. Surrounding Ground Terrain Plane
-    const groundGeo = new THREE.PlaneGeometry(500, 900);
+    // 8. Surrounding Ground Terrain Plane (wide enough to cover full S-curve excursion)
+    const groundGeo = new THREE.PlaneGeometry(900, 900);
     const groundMat = new THREE.MeshStandardMaterial({
       color: 0x0b131e,
       roughness: 0.95
@@ -521,6 +598,7 @@ export class GameEngine {
     ground.position.set(0, -0.02, -250);
     group.add(ground);
 
+    this.updateCurvedRibbons();
     return group;
   }
 
@@ -1135,7 +1213,8 @@ export class GameEngine {
     });
 
     const laneX = LANE_CENTERS[laneIndex] ?? LANE_CENTERS[1];
-    carGroup.position.set(laneX, 0, initialZ);
+    carGroup.position.set(this.getRoadCenterX(initialZ) + laneX, 0, initialZ);
+    carGroup.rotation.y = this.getRoadYaw(initialZ);
     this.scene.add(carGroup);
 
     const speed =
@@ -1561,12 +1640,114 @@ export class GameEngine {
   }
 
   public toggleAutoPilot(): boolean {
+    if (this.studyAutopilotMode) return true;
     this.autoPilot = !this.autoPilot;
     if (this.autoPilot) {
       const closestLane = this.getClosestPlayerLaneIndex();
       this.playerTargetX = LANE_CENTERS[closestLane];
     }
     return this.autoPilot;
+  }
+
+  /**
+   * Enables deterministic LKA Autopilot Lock for Empirical Study runs:
+   * - Locks speed to 100 km/h (27.78 m/s) in Lane 2 (-2.0m)
+   * - Disables manual WASD/Arrow steering & throttle so keys serve purely as response inputs
+   * - Replaces random traffic with deterministic distant ambient vehicles
+   */
+  public setStudyAutopilotMode(enabled: boolean, suppressVisualAlerts = false) {
+    this.studyAutopilotMode = enabled;
+    this.suppressStudyVisualAlerts = enabled && suppressVisualAlerts;
+    this.trafficCars.forEach((c) => this.scene.remove(c.mesh));
+    this.trafficCars = [];
+    this.activeAlert = null;
+    this.activeFrontWarning = false;
+    if (this.leftMirrorBSM) {
+      (this.leftMirrorBSM.material as THREE.MeshBasicMaterial).color.setHex(0x1e293b);
+    }
+    if (this.rightMirrorBSM) {
+      (this.rightMirrorBSM.material as THREE.MeshBasicMaterial).color.setHex(0x1e293b);
+    }
+
+    if (enabled) {
+      this.autoPilot = true;
+      this.playerSpeed = 27.78;
+      this.playerX = LANE_CENTERS[1];
+      this.playerTargetX = LANE_CENTERS[1];
+      this.playerLateralVelocity = 0;
+      // Deterministic distant ambient traffic in Lane 3 (+6.0m) so visual density is constant across blocks
+      const ambAhead = this.createTrafficCar(3, -54, 'sedan', 'cruiser', this.playerSpeed);
+      ambAhead.name = 'Ambient Cruiser Ahead';
+      ambAhead.isAcknowledged = true;
+      const ambBehind = this.createTrafficCar(3, 52, 'suv', 'cruiser', this.playerSpeed);
+      ambBehind.name = 'Ambient Cruiser Behind';
+      ambBehind.isAcknowledged = true;
+      this.trafficCars.push(ambAhead, ambBehind);
+    } else {
+      this.autoPilot = false;
+      this.spawnInitialTraffic();
+    }
+  }
+
+  /**
+   * Spawns a deterministic study hazard vehicle in the specified target zone
+   * synchronized with a trial onset during Part 1 or Part 2.
+   */
+  public spawnStudyHazardCar(target: ProxyTarget, _seedIndex = 0) {
+    // Remove any previous study hazard cars while keeping ambient Lane-3 cruisers
+    for (let i = this.trafficCars.length - 1; i >= 0; i--) {
+      if (this.trafficCars[i].id.startsWith('study_') || this.trafficCars[i].laneIndex !== 3) {
+        this.scene.remove(this.trafficCars[i].mesh);
+        this.trafficCars.splice(i, 1);
+      }
+    }
+
+    let car: TrafficCarData;
+    if (target === 'LEFT_MIRROR') {
+      car = this.createTrafficCar(0, 7.5, 'sport', 'blind_spot_linger', this.playerSpeed + 0.5);
+      car.name = 'Study Left Blind-Spot Hazard';
+    } else if (target === 'RIGHT_MIRROR') {
+      car = this.createTrafficCar(2, 7.5, 'suv', 'blind_spot_linger', this.playerSpeed + 0.5);
+      car.name = 'Study Right Blind-Spot Hazard';
+    } else if (target === 'REAR_MIRROR') {
+      car = this.createTrafficCar(1, 18.0, 'sport', 'tailgater', this.playerSpeed + 2.8);
+      car.name = 'Study Rear Tailgater Hazard';
+    } else {
+      car = this.createTrafficCar(1, -18.0, 'truck', 'cruiser', this.playerSpeed - 1.5);
+      car.name = 'Study Forward Lead Hazard';
+    }
+
+    car.id = `study_${target}`;
+    (car.hazardRing.material as THREE.MeshBasicMaterial).color.setHex(0xef4444);
+    (car.hazardRing.material as THREE.MeshBasicMaterial).opacity = 0.78;
+    this.trafficCars.push(car);
+  }
+
+  public clearStudyHazards(acknowledgeOnly = false) {
+    if (acknowledgeOnly) {
+      this.trafficCars.forEach((car) => {
+        if (car.id.startsWith('study_')) {
+          car.isAcknowledged = true;
+          if (car.bodyMesh && car.bodyMesh.material) {
+            (car.bodyMesh.material as THREE.MeshStandardMaterial).color.setHex(0x10b981);
+          }
+          if (car.hazardRing && car.hazardRing.material) {
+            (car.hazardRing.material as THREE.MeshBasicMaterial).color.setHex(0x10b981);
+          }
+        }
+      });
+      this.activeAlert = null;
+      return;
+    }
+
+    for (let i = this.trafficCars.length - 1; i >= 0; i--) {
+      if (this.trafficCars[i].id.startsWith('study_')) {
+        this.scene.remove(this.trafficCars[i].mesh);
+        this.trafficCars.splice(i, 1);
+      }
+    }
+    this.activeAlert = null;
+    this.activeFrontWarning = false;
   }
 
   public updateDriverHeadPose(yawDeg: number, pitchDeg: number) {
@@ -1618,6 +1799,9 @@ export class GameEngine {
 
   private handleKeyDown(e: KeyboardEvent) {
     if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'SELECT') {
+      return;
+    }
+    if (this.studyAutopilotMode) {
       return;
     }
     this.keysPressed[e.code] = true;
@@ -1748,33 +1932,41 @@ export class GameEngine {
       this.cameraTrauma = Math.max(0, this.cameraTrauma - 1.8 * delta);
     }
 
-    // 2. Steering & Physics Controls (A / D / W / S or Arrows)
+    // 2. Steering & Physics Controls (Disabled in Study Autopilot Lock so WASD/Arrows act purely as trial response inputs)
     const isSteerLeft =
-      this.keysPressed['KeyA'] ||
-      this.keysPressed['ArrowLeft'] ||
-      this.keysPressed['a'] ||
-      this.keysPressed['A'];
+      !this.studyAutopilotMode &&
+      (this.keysPressed['KeyA'] ||
+        this.keysPressed['ArrowLeft'] ||
+        this.keysPressed['a'] ||
+        this.keysPressed['A']);
     const isSteerRight =
-      this.keysPressed['KeyD'] ||
-      this.keysPressed['ArrowRight'] ||
-      this.keysPressed['d'] ||
-      this.keysPressed['D'];
+      !this.studyAutopilotMode &&
+      (this.keysPressed['KeyD'] ||
+        this.keysPressed['ArrowRight'] ||
+        this.keysPressed['d'] ||
+        this.keysPressed['D']);
     const isThrottle =
-      this.keysPressed['KeyW'] ||
-      this.keysPressed['ArrowUp'] ||
-      this.keysPressed['w'] ||
-      this.keysPressed['W'];
+      !this.studyAutopilotMode &&
+      (this.keysPressed['KeyW'] ||
+        this.keysPressed['ArrowUp'] ||
+        this.keysPressed['w'] ||
+        this.keysPressed['W']);
     const isBrake =
-      this.keysPressed['KeyS'] ||
-      this.keysPressed['ArrowDown'] ||
-      this.keysPressed['s'] ||
-      this.keysPressed['S'];
+      !this.studyAutopilotMode &&
+      (this.keysPressed['KeyS'] ||
+        this.keysPressed['ArrowDown'] ||
+        this.keysPressed['s'] ||
+        this.keysPressed['S']);
 
     let steerIntent = 0;
     if (isSteerLeft) steerIntent -= 1;
     if (isSteerRight) steerIntent += 1;
 
-    if (steerIntent !== 0) {
+    if (this.studyAutopilotMode) {
+      this.autoPilot = true;
+      this.playerTargetX = LANE_CENTERS[1];
+      this.playerSpeed = 27.78;
+    } else if (steerIntent !== 0) {
       this.playerTargetX += steerIntent * 10.5 * delta;
       this.playerTargetX = Math.max(-6.4, Math.min(6.4, this.playerTargetX));
     } else if (this.autoPilot) {
@@ -1794,24 +1986,32 @@ export class GameEngine {
     this.playerX += (this.playerTargetX - this.playerX) * Math.min(1.0, 10.0 * delta);
     this.playerX = Math.max(-6.6, Math.min(6.6, this.playerX));
 
-    // Rotate Steering Wheel smoothly
+    // Curved highway tangent heading at ego vehicle (z = 0)
+    const egoRoadYaw = this.getRoadYaw(0);
+    const cosEgo = Math.cos(egoRoadYaw);
+    const sinEgo = Math.sin(egoRoadYaw);
+
+    // Rotate Steering Wheel smoothly (includes road curve tracking in Autopilot)
     if (this.steeringWheel) {
-      const targetWheelRoll = -steerIntent * 0.55 - (this.playerTargetX - this.playerX) * 0.65;
+      const roadSteerAngle = this.autoPilot || steerIntent === 0 ? egoRoadYaw * 2.2 : 0;
+      const targetWheelRoll = -steerIntent * 0.55 - (this.playerTargetX - this.playerX) * 0.65 + roadSteerAngle;
       this.steeringWheel.rotation.z +=
         (targetWheelRoll - this.steeringWheel.rotation.z) * Math.min(1.0, 14.0 * delta);
     }
 
-    // Dynamic car chassis roll into the turn
+    // Dynamic car chassis roll & curved highway tangent yaw
     this.playerCarGroup.rotation.z = (this.playerTargetX - this.playerX) * -0.045;
-    this.playerCarGroup.rotation.y = (this.playerTargetX - this.playerX) * -0.035;
+    this.playerCarGroup.rotation.y = egoRoadYaw + (this.playerTargetX - this.playerX) * -0.035;
 
     // Throttle and Braking + Brake Light Flare
-    if (isThrottle) {
-      this.playerSpeed = Math.min(44.5, this.playerSpeed + 20.0 * delta); // up to 160 km/h
-    } else if (isBrake) {
-      this.playerSpeed = Math.max(11.0, this.playerSpeed - 28.0 * delta); // down to 40 km/h
-    } else {
-      this.playerSpeed += (27.78 - this.playerSpeed) * 1.8 * delta; // cruise ~100 km/h
+    if (!this.studyAutopilotMode) {
+      if (isThrottle) {
+        this.playerSpeed = Math.min(44.5, this.playerSpeed + 20.0 * delta); // up to 160 km/h
+      } else if (isBrake) {
+        this.playerSpeed = Math.max(11.0, this.playerSpeed - 28.0 * delta); // down to 40 km/h
+      } else {
+        this.playerSpeed += (27.78 - this.playerSpeed) * 1.8 * delta; // cruise ~100 km/h
+      }
     }
 
     if (this.playerTaillightBar) {
@@ -1830,48 +2030,69 @@ export class GameEngine {
     this.distanceTraveled += this.playerSpeed * delta;
     this.score += Math.round(this.playerSpeed * delta * 0.5);
 
-    // 3. Scroll Registered Repeating Highway Elements Seamlessly
+    // 3. Update Curved Highway Ribbons & Scroll Repeating Elements Along Curvature
+    this.updateCurvedRibbons();
+
     for (let i = 0; i < this.scrollingObjects.length; i++) {
       const item = this.scrollingObjects[i];
       item.obj.position.z += this.playerSpeed * delta;
       if (item.obj.position.z > item.maxZ) {
         item.obj.position.z -= item.wrapLength;
       }
+      const zNow = item.obj.position.z;
+      item.obj.position.x = item.baseX + this.getRoadCenterX(zNow);
+      item.obj.rotation.y = this.getRoadYaw(zNow);
     }
 
-    // 4. Update Player Vehicle and Cameras with Lateral Movement
+    // 4. Update Player Vehicle and Cameras Aligned to Road Tangent Heading
     this.playerCarGroup.position.x = this.playerX;
-    this.mainCamera.position.x = this.playerX;
-    this.hoodCamera.position.x = this.playerX;
-    this.hoodCamera.rotation.set(0, 0, 0);
+
+    this.mainCamera.rotation.order = 'YXZ';
+    this.mainCamera.position.set(this.playerX + 0.12 * sinEgo, 1.24, 0.12 * cosEgo);
+    this.hoodCamera.rotation.order = 'YXZ';
+    this.hoodCamera.position.set(this.playerX - 1.25 * sinEgo, 1.08, -1.25 * cosEgo);
+    this.hoodCamera.rotation.set(0, egoRoadYaw, 0);
 
     // Smoothly interpolate driver head pose for cockpit camera
     this.smoothedCameraYaw += (this.driverYawRad * 0.48 - this.smoothedCameraYaw) * Math.min(1.0, 12.0 * delta);
     this.smoothedCameraPitch +=
       (this.driverPitchRad * 0.35 - this.smoothedCameraPitch) * Math.min(1.0, 12.0 * delta);
-    this.mainCamera.rotation.y = this.smoothedCameraYaw;
+    this.mainCamera.rotation.y = egoRoadYaw + this.smoothedCameraYaw;
     this.mainCamera.rotation.x = this.smoothedCameraPitch;
     this.mainCamera.rotation.z = 0;
 
-    // Chase Camera follows player smoothly
-    this.chaseCamera.position.x += (this.playerX - this.chaseCamera.position.x) * Math.min(1.0, 8.5 * delta);
-    this.chaseCamera.lookAt(this.playerX * 0.85, 1.15, -16);
+    // Chase Camera follows player smoothly along the curve
+    const chaseTargetX = this.playerX + 7.2 * sinEgo;
+    const chaseTargetZ = 7.2 * cosEgo;
+    this.chaseCamera.position.x += (chaseTargetX - this.chaseCamera.position.x) * Math.min(1.0, 8.5 * delta);
+    this.chaseCamera.position.z += (chaseTargetZ - this.chaseCamera.position.z) * Math.min(1.0, 8.5 * delta);
+    this.chaseCamera.lookAt(this.getRoadCenterX(-18) + this.playerX * 0.85, 1.15, -18);
 
-    // Mirror Cameras follow vehicle position & look into Left, Right, and Rear zones
-    this.leftMirrorCamera.position.x = this.playerX - 1.05;
-    this.leftMirrorCamera.lookAt(this.playerX - 4.2, 0.95, 75);
+    // Mirror Cameras follow vehicle heading & curve geometry behind the vehicle
+    this.leftMirrorCamera.position.set(
+      this.playerX - 1.05 * cosEgo - 0.35 * sinEgo,
+      1.08,
+      1.05 * sinEgo - 0.35 * cosEgo
+    );
+    this.leftMirrorCamera.lookAt(this.getRoadCenterX(65) + this.playerX - 4.0, 0.95, 65);
 
-    this.rightMirrorCamera.position.x = this.playerX + 1.05;
-    this.rightMirrorCamera.lookAt(this.playerX + 4.2, 0.95, 75);
+    this.rightMirrorCamera.position.set(
+      this.playerX + 1.05 * cosEgo - 0.35 * sinEgo,
+      1.08,
+      -1.05 * sinEgo - 0.35 * cosEgo
+    );
+    this.rightMirrorCamera.lookAt(this.getRoadCenterX(65) + this.playerX + 4.0, 0.95, 65);
 
-    this.rearMirrorCamera.position.x = this.playerX;
-    this.rearMirrorCamera.lookAt(this.playerX, 1.05, 85);
+    this.rearMirrorCamera.position.set(this.playerX + 0.35 * sinEgo, 1.42, 0.35 * cosEgo);
+    this.rearMirrorCamera.lookAt(this.getRoadCenterX(75) + this.playerX, 1.05, 75);
 
     // 5. Traffic Spawning, Lane Changes, and ADAS Threat Detection
-    this.timeSinceLastSpawn += delta;
-    if (this.timeSinceLastSpawn > 4.2 || (this.timeSinceLastSpawn > 1.8 && this.trafficCars.length < 2)) {
-      this.spawnTrafficWave();
-      this.timeSinceLastSpawn = 0;
+    if (!this.studyAutopilotMode) {
+      this.timeSinceLastSpawn += delta;
+      if (this.timeSinceLastSpawn > 4.2 || (this.timeSinceLastSpawn > 1.8 && this.trafficCars.length < 2)) {
+        this.spawnTrafficWave();
+        this.timeSinceLastSpawn = 0;
+      }
     }
 
     const blinkOn = Math.floor(this.elapsedTime * 5) % 2 === 0;
@@ -1883,8 +2104,19 @@ export class GameEngine {
     for (let i = this.trafficCars.length - 1; i >= 0; i--) {
       const car = this.trafficCars[i];
 
-      // Role-specific speed & lane behavior
-      if (car.role === 'blind_spot_linger') {
+      if (car.id.startsWith('study_')) {
+        // Keep active study hazard car smoothly paced in its target observation zone
+        if (car.id === 'study_REAR_MIRROR' && car.mesh.position.z <= 11.5) {
+          car.zSpeed += (this.playerSpeed - car.zSpeed) * 5.0 * delta;
+        } else if (car.id === 'study_FRONT_WINDSHIELD' && car.mesh.position.z >= -14.0) {
+          car.zSpeed += (this.playerSpeed - car.zSpeed) * 5.0 * delta;
+        } else if (
+          (car.id === 'study_LEFT_MIRROR' || car.id === 'study_RIGHT_MIRROR') &&
+          car.mesh.position.z <= 5.5
+        ) {
+          car.zSpeed += (this.playerSpeed - car.zSpeed) * 5.0 * delta;
+        }
+      } else if (car.role === 'blind_spot_linger') {
         // Lingers inside the player's blind spot (z between 2m and 8m) for several seconds before accelerating past
         if (car.mesh.position.z > 2.5 && car.mesh.position.z < 9.5 && !car.isAcknowledged) {
           car.zSpeed += (this.playerSpeed + 0.9 - car.zSpeed) * 4.0 * delta;
@@ -1920,8 +2152,10 @@ export class GameEngine {
 
       // Smooth lane changing for AI cars
       const targetLaneX = LANE_CENTERS[car.targetLaneIndex] ?? car.currentX;
+      let laneChangeYaw = 0;
       if (Math.abs(targetLaneX - car.currentX) > 0.05) {
         const dir = targetLaneX > car.currentX ? 1 : -1;
+        laneChangeYaw = -dir * 0.08;
         car.currentX += dir * 3.8 * delta;
         if (Math.abs(targetLaneX - car.currentX) < 0.12) {
           car.currentX = targetLaneX;
@@ -1939,19 +2173,23 @@ export class GameEngine {
         if (car.rightBlinker) (car.rightBlinker.material as THREE.MeshBasicMaterial).color.setHex(0x334155);
       }
 
-      car.mesh.position.x = car.currentX;
-
       const relativeSpeed = car.zSpeed - this.playerSpeed;
       car.mesh.position.z -= relativeSpeed * delta;
+      const carZ = car.mesh.position.z;
+      car.mesh.position.x = this.getRoadCenterX(carZ) + car.currentX;
+      car.mesh.rotation.y = this.getRoadYaw(carZ) + laneChangeYaw;
 
       // Spin AI car wheels
       car.wheels.forEach((w) => {
         w.rotation.x -= (car.zSpeed / 0.35) * delta;
       });
 
-      const relX = car.currentX - this.playerX;
-      const relZ = car.mesh.position.z; // +Z is behind player, -Z is ahead of player
-      const isoY = -relZ; // ISO 8855: +Y is ahead, -Y is behind
+      // Transform relative threat coordinates into the ego vehicle's local ISO 8855 reference frame
+      const dxWorld = car.mesh.position.x - this.playerX;
+      const dzWorld = carZ;
+      const relX = dxWorld * cosEgo - dzWorld * sinEgo; // Lateral in ego frame (+ Right, - Left)
+      const isoY = -dxWorld * sinEgo - dzWorld * cosEgo; // Longitudinal in ego frame (+ Forward, - Rear)
+      const relZ = -isoY; // +Z behind ego, -Z ahead of ego
       const dist = calculateDistance(relX, isoY);
       const az = calculateAzimuth(relX, isoY);
 
@@ -1982,7 +2220,7 @@ export class GameEngine {
       }
 
       // Trigger ADAS Alert when entering Left/Right Blind Spot or Rear Tailgate zone
-      if (!car.isAcknowledged) {
+      if (!car.isAcknowledged && !this.suppressStudyVisualAlerts) {
         if ((isLeftBlindSpot || isRightBlindSpot) && !car.blindSpotNotified) {
           car.blindSpotNotified = true;
           const side: MirrorSide = isLeftBlindSpot ? 'left' : 'right';

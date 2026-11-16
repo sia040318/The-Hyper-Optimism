@@ -33,6 +33,9 @@ export interface GameWindowHandle {
   reset: () => void;
   toggleCameraMode: () => CameraMode;
   toggleAutoPilot: () => boolean;
+  setStudyAutopilotMode: (enabled: boolean, suppressVisualAlerts?: boolean) => void;
+  spawnStudyHazardCar: (target: import('../types/threats').ProxyTarget, seedIndex?: number) => void;
+  clearStudyHazards: (acknowledgeOnly?: boolean) => void;
   triggerScenario: (scenario: ScenarioType) => void;
   notifyMirrorCheck: (side: MirrorSide) => void;
   updateDriverHeadPose: (yawDeg: number, pitchDeg: number) => void;
@@ -45,6 +48,7 @@ export interface GameWindowProps extends GameEngineOptions {
   driverGaze?: GazeZone;
   isSilenced?: boolean;
   isFullscreenMode?: boolean;
+  hideStudySpoilers?: boolean;
   onToggleFullscreen?: () => void;
   onSelectGaze?: (zone: GazeZone) => void;
 }
@@ -61,6 +65,7 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
       driverGaze = 'CENTER',
       isSilenced = false,
       isFullscreenMode = false,
+      hideStudySpoilers = false,
       onToggleFullscreen,
       onSelectGaze
     },
@@ -114,6 +119,16 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
           return ap;
         }
         return false;
+      },
+      setStudyAutopilotMode: (enabled: boolean, suppressVisualAlerts = false) => {
+        engineRef.current?.setStudyAutopilotMode(enabled, suppressVisualAlerts);
+        setHud((prev) => ({ ...prev, autoPilot: enabled }));
+      },
+      spawnStudyHazardCar: (target, seedIndex) => {
+        engineRef.current?.spawnStudyHazardCar(target, seedIndex);
+      },
+      clearStudyHazards: (acknowledgeOnly) => {
+        engineRef.current?.clearStudyHazards(acknowledgeOnly);
       },
       triggerScenario: (scenario: ScenarioType) => {
         engineRef.current?.triggerScenario(scenario);
@@ -556,86 +571,91 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
               )}
             </div>
 
-            {/* LKA Auto-Steer Toggle Button */}
-            <button
-              onClick={handleAutoPilotToggle}
-              className="btn"
-              style={{
-                padding: '6px 10px',
-                borderRadius: '8px',
-                background: hud.autoPilot ? 'rgba(16, 185, 129, 0.22)' : 'rgba(9, 13, 22, 0.86)',
-                border: `1px solid ${hud.autoPilot ? '#10b981' : 'rgba(255, 255, 255, 0.16)'}`,
-                color: hud.autoPilot ? '#34d399' : '#94a3b8',
-                fontSize: '11px',
-                fontWeight: 700
-              }}
-              title="Toggle ADAS Lane-Keep Assist Auto-Steer (Spacebar)"
-            >
-              <Navigation size={13} />
-              <span>{hud.autoPilot ? 'LKA: ON' : 'LKA: OFF'}</span>
-            </button>
+            {/* LKA Auto-Steer Toggle, Camera Mode, Reset & Fullscreen (Hidden during empirical study runs) */}
+            {!hideStudySpoilers && (
+              <>
+                <button
+                  onClick={handleAutoPilotToggle}
+                  className="btn"
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: '8px',
+                    background: hud.autoPilot ? 'rgba(16, 185, 129, 0.22)' : 'rgba(9, 13, 22, 0.86)',
+                    border: `1px solid ${hud.autoPilot ? '#10b981' : 'rgba(255, 255, 255, 0.16)'}`,
+                    color: hud.autoPilot ? '#34d399' : '#94a3b8',
+                    fontSize: '11px',
+                    fontWeight: 700
+                  }}
+                  title="Toggle ADAS Lane-Keep Assist Auto-Steer (Spacebar)"
+                >
+                  <Navigation size={13} />
+                  <span>{hud.autoPilot ? 'LKA: ON' : 'LKA: OFF'}</span>
+                </button>
 
-            {/* Camera View Switcher Button */}
-            <button
-              onClick={handleCameraToggle}
-              className="btn"
-              style={{
-                padding: '6px 10px',
-                borderRadius: '8px',
-                background: 'rgba(9, 13, 22, 0.86)',
-                border: '1px solid rgba(0, 240, 255, 0.35)',
-                color: '#00f0ff',
-                fontSize: '11px',
-                fontWeight: 700
-              }}
-              title="Cycle Camera View: Cockpit / Chase / Hood (Key C)"
-            >
-              <Camera size={13} />
-              <span>
-                {hud.cameraMode === 'cockpit'
-                  ? 'Cockpit'
-                  : hud.cameraMode === 'chase'
-                  ? 'Chase 360°'
-                  : 'Hood Cam'}
-              </span>
-            </button>
+                {/* Camera View Switcher Button */}
+                <button
+                  onClick={handleCameraToggle}
+                  className="btn"
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: '8px',
+                    background: 'rgba(9, 13, 22, 0.86)',
+                    border: '1px solid rgba(0, 240, 255, 0.35)',
+                    color: '#00f0ff',
+                    fontSize: '11px',
+                    fontWeight: 700
+                  }}
+                  title="Cycle Camera View: Cockpit / Chase / Hood (Key C)"
+                >
+                  <Camera size={13} />
+                  <span>
+                    {hud.cameraMode === 'cockpit'
+                      ? 'Cockpit'
+                      : hud.cameraMode === 'chase'
+                      ? 'Chase 360°'
+                      : 'Hood Cam'}
+                  </span>
+                </button>
 
-            {/* Reset Traffic Button */}
-            <button
-              onClick={() => engineRef.current?.reset()}
-              className="btn"
-              style={{
-                padding: '6px 8px',
-                borderRadius: '8px',
-                background: 'rgba(9, 13, 22, 0.86)',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                color: '#cbd5e1'
-              }}
-              title="Reset Highway Traffic & Score"
-            >
-              <RotateCcw size={13} />
-            </button>
+                {/* Reset Traffic Button */}
+                <button
+                  onClick={() => engineRef.current?.reset()}
+                  className="btn"
+                  style={{
+                    padding: '6px 8px',
+                    borderRadius: '8px',
+                    background: 'rgba(9, 13, 22, 0.86)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    color: '#cbd5e1'
+                  }}
+                  title="Reset Highway Traffic & Score"
+                >
+                  <RotateCcw size={13} />
+                </button>
 
-            {/* Fullscreen Toggle */}
-            {onToggleFullscreen && (
-              <button
-                onClick={onToggleFullscreen}
-                className="btn"
-                style={{
-                  padding: '6px 8px',
-                  borderRadius: '8px',
-                  background: 'rgba(9, 13, 22, 0.86)',
-                  border: '1px solid rgba(255, 255, 255, 0.2)'
-                }}
-                title={isFullscreenMode ? 'Exit Fullscreen (Esc)' : 'Expand Fullscreen Driving Mode'}
-              >
-                {isFullscreenMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-              </button>
+                {/* Fullscreen Toggle */}
+                {onToggleFullscreen && (
+                  <button
+                    onClick={onToggleFullscreen}
+                    className="btn"
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: '8px',
+                      background: 'rgba(9, 13, 22, 0.86)',
+                      border: '1px solid rgba(255, 255, 255, 0.2)'
+                    }}
+                    title={isFullscreenMode ? 'Exit Fullscreen (Esc)' : 'Expand Fullscreen Driving Mode'}
+                  >
+                    {isFullscreenMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
 
-        {/* Center AR-HUD Alert / Reaction Banner (Positioned cleanly below Rear-View Mirror at top: 28%) */}
+        {/* Center AR-HUD Alert / Reaction Banner (Hidden during blind empirical study blocks to avoid directional spoilers) */}
+        {!hideStudySpoilers && (
         <div
           style={{
             position: 'absolute',
@@ -715,8 +735,10 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
             </div>
           ) : null}
         </div>
+        )}
 
-        {/* Bottom Driving & Gaze Controls Bar */}
+        {/* Bottom Driving & Gaze Controls Bar (Hidden in Empirical Study Mode) */}
+        {!hideStudySpoilers && (
         <div
           style={{
             position: 'absolute',
@@ -754,6 +776,7 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
             <strong>Keys 1 / 2 / 3 / 4</strong> or <strong>Click Mirror</strong> Simulate Gaze
           </span>
         </div>
+        )}
       </div>
     );
   }

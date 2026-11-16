@@ -1,0 +1,389 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ADAS Gaze-Contingent Audio Project - Private Empirical Study Telemetry & Admin API Stack'
+
+Parameters:
+  ProjectPrefix:
+    Type: String
+    Default: 'adas-gaze'
+    Description: Prefix for all isolated study backend resources
+  StudyPasscode:
+    Type: String
+    Default: 'KNU2026'
+    Description: Study participant ingestion token validated via x-study-token header
+  AdminPassword:
+    Type: String
+    NoEcho: true
+    Default: 'AURA-HCI-2026!'
+    Description: Researcher Admin Portal password validated via x-admin-password header
+
+Resources:
+  # 1. Private Encrypted & Versioned S3 Bucket for Study Participant Logs
+  StudyLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectPrefix}-study-logs-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # 2. On-Demand DynamoDB Table for Session & Block Summaries
+  StudySessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-study-sessions-${AWS::AccountId}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: participant_id
+          AttributeType: S
+        - AttributeName: block_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: participant_id
+          KeyType: HASH
+        - AttributeName: block_key
+          KeyType: RANGE
+
+  # 3. Scoped IAM Execution Role for Study API Lambda
+  StudyApiLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectPrefix}-study-api-role-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ScopedStudyTelemetryStorageAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub '${StudyLogsBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt StudyLogsBucket.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !GetAtt StudySessionsTable.Arn
+
+  # 4. Serverless API Lambda Function (Python 3.12)
+  StudyApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectPrefix}-study-api'
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt StudyApiLambdaRole.Arn
+      Timeout: 20
+      MemorySize: 256
+      Environment:
+        Variables:
+          LOGS_BUCKET: !Ref StudyLogsBucket
+          SESSIONS_TABLE: !Ref StudySessionsTable
+          STUDY_PASSCODE: !Ref StudyPasscode
+          ADMIN_PASSWORD: !Ref AdminPassword
+      Code:
+        ZipFile: |
+          import base64
+          from datetime import datetime, timezone
+          from decimal import Decimal
+          import hmac
+          import json
+          import os
+          import re
+          import boto3
+          from botocore.config import Config
+
+          AWS_REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
+          s3 = boto3.client(
+              "s3",
+              region_name=AWS_REGION,
+              endpoint_url=f"https://s3.{AWS_REGION}.amazonaws.com",
+              config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
+          )
+          ddb = boto3.resource("dynamodb", region_name=AWS_REGION)
+
+          LOGS_BUCKET = os.environ["LOGS_BUCKET"]
+          SESSIONS_TABLE = os.environ["SESSIONS_TABLE"]
+          STUDY_PASSCODE = os.environ["STUDY_PASSCODE"]
+          ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
+
+          PID_RE = re.compile(r"^P_\d{2,3}$")
+          MAX_BODY_BYTES = 256000  # 250 KB limit
+
+
+          class DecimalEncoder(json.JSONEncoder):
+              def default(self, obj):
+                  if isinstance(obj, Decimal):
+                      return int(obj) if obj % 1 == 0 else float(obj)
+                  return super().default(obj)
+
+
+          def json_response(status_code, body):
+              return {
+                  "statusCode": status_code,
+                  "headers": {
+                      "Content-Type": "application/json",
+                      "Cache-Control": "no-store"
+                  },
+                  "body": json.dumps(body, cls=DecimalEncoder)
+              }
+
+
+          def decode_body(event):
+              raw = event.get("body") or ""
+              if event.get("isBase64Encoded"):
+                  raw_bytes = base64.b64decode(raw)
+                  return raw_bytes, raw_bytes.decode("utf-8")
+              return raw.encode("utf-8"), raw
+
+
+          def handle_ingest(headers, raw_bytes, body_str):
+              token = headers.get("x-study-token", "")
+              if not hmac.compare_digest(token, STUDY_PASSCODE):
+                  return json_response(401, {"ok": False, "error": "Invalid study token"})
+
+              if len(raw_bytes) > MAX_BODY_BYTES:
+                  return json_response(413, {"ok": False, "error": "Payload exceeds 250 KB limit"})
+
+              try:
+                  payload = json.loads(body_str, parse_float=Decimal)
+              except Exception:
+                  return json_response(400, {"ok": False, "error": "Malformed JSON payload"})
+
+              pid = str(payload.get("participant_id", "")).strip()
+              if not PID_RE.match(pid):
+                  return json_response(400, {"ok": False, "error": "participant_id must match ^P_\\d{2,3}$"})
+
+              part = payload.get("part")
+              condition = str(payload.get("condition", "")).strip()
+              block_key = str(payload.get("block_key", f"PART{part}#{condition}")).strip()
+              summary = payload.get("summary") or {}
+              bundle = payload.get("session_bundle") or payload
+
+              now = datetime.now(timezone.utc)
+              ts_slug = now.strftime("%Y%m%dT%H%M%SZ")
+              part_folder = f"part{part}" if part in (1, 2) else "misc"
+
+              archive_key = f"logs/{part_folder}/{pid}_{ts_slug}.json"
+              latest_key = f"logs/latest/{pid}.json"
+              pretty_json = json.dumps(bundle, cls=DecimalEncoder, indent=2)
+
+              s3.put_object(
+                  Bucket=LOGS_BUCKET,
+                  Key=archive_key,
+                  Body=pretty_json.encode("utf-8"),
+                  ContentType="application/json",
+                  ServerSideEncryption="AES256"
+              )
+              s3.put_object(
+                  Bucket=LOGS_BUCKET,
+                  Key=latest_key,
+                  Body=pretty_json.encode("utf-8"),
+                  ContentType="application/json",
+                  ServerSideEncryption="AES256"
+              )
+
+              table = ddb.Table(SESSIONS_TABLE)
+              table.put_item(
+                  Item={
+                      "participant_id": pid,
+                      "block_key": block_key,
+                      "part": int(part) if part in (1, 2) else 0,
+                      "condition": condition,
+                      "summary": summary,
+                      "s3_key": archive_key,
+                      "latest_s3_key": latest_key,
+                      "updated_at": now.isoformat()
+                  }
+              )
+
+              return json_response(200, {
+                  "ok": True,
+                  "participant_id": pid,
+                  "block_key": block_key,
+                  "s3_key": archive_key
+              })
+
+
+          def verify_admin(headers, body_str=None):
+              pwd = headers.get("x-admin-password", "")
+              if not pwd and body_str:
+                  try:
+                      pwd = str(json.loads(body_str).get("password", ""))
+                  except Exception:
+                      pwd = ""
+              return bool(pwd) and hmac.compare_digest(pwd, ADMIN_PASSWORD)
+
+
+          def handle_admin_results(headers):
+              if not verify_admin(headers):
+                  return json_response(401, {"ok": False, "error": "Unauthorized admin credentials"})
+
+              table = ddb.Table(SESSIONS_TABLE)
+              items = []
+              scan_kwargs = {}
+              while True:
+                  resp = table.scan(**scan_kwargs)
+                  items.extend(resp.get("Items", []))
+                  last_key = resp.get("LastEvaluatedKey")
+                  if not last_key:
+                      break
+                  scan_kwargs["ExclusiveStartKey"] = last_key
+
+              by_pid = {}
+              for item in items:
+                  pid = item["participant_id"]
+                  entry = by_pid.setdefault(pid, {"blocks": [], "latest_s3_key": item.get("latest_s3_key")})
+                  entry["blocks"].append(item)
+                  if item.get("latest_s3_key"):
+                      entry["latest_s3_key"] = item["latest_s3_key"]
+
+              sessions = []
+              for pid in sorted(by_pid.keys()):
+                  latest_key = by_pid[pid].get("latest_s3_key") or f"logs/latest/{pid}.json"
+                  bundle = None
+                  presigned_url = None
+                  try:
+                      obj = s3.get_object(Bucket=LOGS_BUCKET, Key=latest_key)
+                      bundle = json.loads(obj["Body"].read().decode("utf-8"))
+                      presigned_url = s3.generate_presigned_url(
+                          "get_object",
+                          Params={"Bucket": LOGS_BUCKET, "Key": latest_key},
+                          ExpiresIn=3600
+                      )
+                  except Exception:
+                      bundle = None
+
+                  if bundle:
+                      bundle["s3_key"] = latest_key
+                      bundle["presigned_url"] = presigned_url
+                      bundle["dynamo_blocks"] = by_pid[pid]["blocks"]
+                      sessions.append(bundle)
+
+              return json_response(200, {
+                  "ok": True,
+                  "participant_count": len(sessions),
+                  "sessions": sessions,
+                  "blocks": items
+              })
+
+
+          def handler(event, context):
+              http_info = event.get("requestContext", {}).get("http", {})
+              method = http_info.get("method", "").upper()
+              path = event.get("rawPath", "/")
+              headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+              raw_bytes, body_str = decode_body(event)
+
+              if method == "POST" and path.endswith("/ingest"):
+                  return handle_ingest(headers, raw_bytes, body_str)
+
+              if method == "POST" and path.endswith("/admin/login"):
+                  if verify_admin(headers, body_str):
+                      return json_response(200, {"ok": True, "authenticated": True})
+                  return json_response(401, {"ok": False, "error": "Invalid admin password"})
+
+              if method == "GET" and path.endswith("/admin/results"):
+                  return handle_admin_results(headers)
+
+              return json_response(404, {"ok": False, "error": f"Route not found: {method} {path}"})
+
+  # 5. API Gateway HTTP API V2 with Throttling & Restricted CORS
+  StudyHttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${ProjectPrefix}-study-http-api'
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - https://d3ok0soe3kf2h1.cloudfront.net
+          - http://localhost:5173
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - content-type
+          - x-study-token
+          - x-admin-password
+        MaxAge: 86400
+
+  StudyHttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref StudyHttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt StudyApiFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  IngestRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref StudyHttpApi
+      RouteKey: 'POST /ingest'
+      Target: !Sub 'integrations/${StudyHttpApiIntegration}'
+
+  AdminLoginRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref StudyHttpApi
+      RouteKey: 'POST /admin/login'
+      Target: !Sub 'integrations/${StudyHttpApiIntegration}'
+
+  AdminResultsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref StudyHttpApi
+      RouteKey: 'GET /admin/results'
+      Target: !Sub 'integrations/${StudyHttpApiIntegration}'
+
+  StudyHttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref StudyHttpApi
+      StageName: '$default'
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 10
+        ThrottlingBurstLimit: 20
+
+  StudyApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StudyApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${StudyHttpApi}/*'
+
+Outputs:
+  ApiEndpoint:
+    Description: 'Base API Gateway HTTP Endpoint for Study Telemetry & Admin Portal'
+    Value: !GetAtt StudyHttpApi.ApiEndpoint
+  StudyLogsBucketName:
+    Description: 'Private S3 Bucket for Participant Study Logs'
+    Value: !Ref StudyLogsBucket
+  StudySessionsTableName:
+    Description: 'DynamoDB Table for Study Session Summaries'
+    Value: !Ref StudySessionsTable
