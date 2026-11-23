@@ -15,6 +15,7 @@ import {
   Minimize2,
   AlertTriangle,
   CheckCircle2,
+  Check,
   ShieldCheck,
   Flame,
   Camera,
@@ -167,7 +168,7 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
           callbacksRef.current.onTrafficEvent?.(e);
         },
         onCollisionEvent: (c) => {
-          setCollisionNotice(`💥 COLLISION IMPACT (${c.relativeSpeedKmh} KM/H ΔV)`);
+          setCollisionNotice(`Collision Impact (${c.relativeSpeedKmh} km/h Δv)`);
           callbacksRef.current.onCollisionEvent?.(c);
         },
         onThreatsUpdate: (threats) => {
@@ -184,7 +185,7 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
             stats.lastReactionMs !== lastReactionShownRef.current
           ) {
             lastReactionShownRef.current = stats.lastReactionMs;
-            setClearedNotice(`✓ CLOSED-LOOP GAZE VERIFIED IN ${stats.lastReactionMs}ms (+SCORE)`);
+            setClearedNotice(`Closed-loop gaze verified in ${stats.lastReactionMs} ms`);
           }
         }
       });
@@ -247,20 +248,22 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
       rect: { x: number; y: number; width: number; height: number },
       isRear = false
     ) => {
-      const isAlert = hud.activeAlert === side;
+      // Suppress directional visual alerts during empirical study mode so participants
+      // rely purely on 3D audio + visual mirror inspection (no flashing spoiler cues).
+      const isAlert = !hideStudySpoilers && hud.activeAlert === side;
       const isFocused = driverGaze === zone;
 
       const borderColor = isFocused
-        ? '#10b981'
+        ? '#34d399'
         : isAlert
-        ? '#ef4444'
-        : 'rgba(148, 163, 184, 0.45)';
+          ? '#f87171'
+          : 'rgba(255, 255, 255, 0.16)';
 
       const boxShadow = isFocused
-        ? '0 0 22px rgba(16, 185, 129, 0.7), inset 0 0 12px rgba(16, 185, 129, 0.35)'
+        ? '0 0 0 1px rgba(52, 211, 153, 0.45), inset 0 0 0 1px rgba(52, 211, 153, 0.25)'
         : isAlert
-        ? '0 0 26px rgba(239, 68, 68, 0.85), inset 0 0 16px rgba(239, 68, 68, 0.45)'
-        : '0 8px 24px rgba(0, 0, 0, 0.75), inset 0 0 0 1px rgba(255, 255, 255, 0.12)';
+          ? '0 0 0 1px rgba(248, 113, 113, 0.55), inset 0 0 12px rgba(248, 113, 113, 0.22)'
+          : 'inset 0 0 0 1px rgba(255, 255, 255, 0.06)';
 
       return (
         <div
@@ -273,17 +276,17 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
             top: `${rect.y * 100}%`,
             width: `${rect.width * 100}%`,
             height: `${rect.height * 100}%`,
-            borderRadius: isRear ? '10px 10px 16px 16px' : side === 'left' ? '14px 8px 8px 14px' : '8px 14px 14px 8px',
-            border: `2.5px solid ${borderColor}`,
+            borderRadius: isRear ? '10px 10px 14px 14px' : side === 'left' ? '12px 8px 8px 12px' : '8px 12px 12px 8px',
+            border: `1.5px solid ${borderColor}`,
             boxShadow,
             cursor: 'pointer',
             zIndex: 6,
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between',
-            padding: '4px 8px',
+            padding: '5px 8px',
             transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
-            background: 'linear-gradient(180deg, rgba(15,23,42,0.28) 0%, transparent 30%, transparent 72%, rgba(9,13,22,0.55) 100%)'
+            background: 'linear-gradient(180deg, rgba(9,9,11,0.34) 0%, transparent 28%, transparent 74%, rgba(9,9,11,0.62) 100%)'
           }}
         >
           {/* Top Mirror Bezel Header */}
@@ -291,10 +294,11 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
             <span
               style={{
                 fontSize: '9px',
-                fontWeight: 800,
+                fontWeight: 600,
                 letterSpacing: '0.06em',
-                color: isFocused ? '#34d399' : isAlert ? '#fca5a5' : '#cbd5e1',
-                background: 'rgba(9, 13, 22, 0.78)',
+                color: isFocused ? '#34d399' : isAlert ? '#fca5a5' : '#e4e4e7',
+                background: 'rgba(9, 9, 11, 0.82)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
                 padding: '1px 6px',
                 borderRadius: '4px',
                 fontFamily: 'var(--font-mono)'
@@ -303,19 +307,23 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
               {label} [{keyHint}]
             </span>
 
-            {/* BSM Triangle Indicator */}
-            <span
-              style={{
-                fontSize: '10px',
-                fontWeight: 800,
-                color: isFocused ? '#10b981' : isAlert ? '#ef4444' : 'rgba(255,255,255,0.25)',
-                background: 'rgba(9, 13, 22, 0.78)',
-                padding: '1px 5px',
-                borderRadius: '4px'
-              }}
-            >
-              ▲ BSM
-            </span>
+            {!hideStudySpoilers && (
+              <span
+                style={{
+                  fontSize: '9px',
+                  fontWeight: 600,
+                  letterSpacing: '0.05em',
+                  color: isFocused ? '#34d399' : isAlert ? '#f87171' : 'rgba(255,255,255,0.35)',
+                  background: 'rgba(9, 9, 11, 0.82)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  padding: '1px 5px',
+                  borderRadius: '4px',
+                  fontFamily: 'var(--font-mono)'
+                }}
+              >
+                BSM
+              </span>
+            )}
           </div>
 
           {/* Bottom Mirror Status Pill */}
@@ -323,34 +331,48 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
             <span
               style={{
                 fontSize: '9px',
-                fontWeight: 700,
-                color: isFocused ? '#10b981' : isAlert ? '#ffffff' : '#94a3b8',
+                fontWeight: 600,
+                fontFamily: 'var(--font-mono)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                color: isFocused ? '#34d399' : isAlert ? '#fafafa' : '#a1a1aa',
                 background: isAlert
-                  ? 'rgba(239, 68, 68, 0.88)'
+                  ? 'rgba(248, 113, 113, 0.88)'
                   : isFocused
-                  ? 'rgba(6, 78, 59, 0.88)'
-                  : 'rgba(9, 13, 22, 0.72)',
+                    ? 'rgba(9, 9, 11, 0.88)'
+                    : 'rgba(9, 9, 11, 0.78)',
+                border: `1px solid ${isFocused ? 'rgba(52, 211, 153, 0.35)' : 'rgba(255, 255, 255, 0.08)'}`,
                 padding: '1px 6px',
                 borderRadius: '4px'
               }}
             >
-              {isFocused && (isAlert || isSilenced)
-                ? '✓ GAZE VERIFIED • MUTED'
-                : isAlert
-                ? '⚠ BLIND SPOT HAZARD'
-                : isFocused
-                ? '👁 DRIVER GAZE LOCKED'
-                : 'CLEAR'}
+              {isFocused && (isAlert || isSilenced) ? (
+                <>
+                  <Check size={10} /> GAZE VERIFIED
+                </>
+              ) : isAlert ? (
+                <>
+                  <AlertTriangle size={10} /> BLIND SPOT HAZARD
+                </>
+              ) : isFocused ? (
+                <>
+                  <Eye size={10} /> GAZE ACTIVE
+                </>
+              ) : (
+                'CLEAR'
+              )}
             </span>
 
-            {isAlert && hud.threatDistanceM !== null && (
+            {!hideStudySpoilers && isAlert && hud.threatDistanceM !== null && (
               <span
                 style={{
                   fontSize: '9px',
                   fontFamily: 'var(--font-mono)',
-                  fontWeight: 800,
-                  color: '#fde047',
-                  background: 'rgba(9, 13, 22, 0.85)',
+                  fontWeight: 600,
+                  color: '#fbbf24',
+                  background: 'rgba(9, 9, 11, 0.88)',
+                  border: '1px solid rgba(251, 191, 36, 0.25)',
                   padding: '1px 5px',
                   borderRadius: '4px'
                 }}
@@ -406,7 +428,8 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
           />
         )}
 
-        {/* Top Telemetry & Controls HUD Bar (Cleanly above Rear-View Mirror) */}
+        {/* Top Telemetry & Controls HUD Bar (Hidden during Empirical Study runs so StudyOrchestrator top bar sits cleanly above Rear-View Mirror) */}
+        {!hideStudySpoilers && (
         <div
           style={{
             position: 'absolute',
@@ -419,39 +442,39 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
             alignItems: 'center',
             pointerEvents: 'none',
             zIndex: 12,
-            background: 'linear-gradient(180deg, rgba(6, 10, 20, 0.85) 0%, rgba(6, 10, 20, 0) 100%)'
+            background: 'linear-gradient(180deg, rgba(9, 9, 11, 0.82) 0%, rgba(9, 9, 11, 0) 100%)'
           }}
         >
           {/* Left: Speedometer, RPM, Gear & Lane */}
           <div
             style={{
-              background: 'rgba(9, 13, 22, 0.86)',
-              backdropFilter: 'blur(12px)',
-              border: '1px solid rgba(0, 240, 255, 0.32)',
-              borderRadius: '10px',
-              padding: '6px 14px',
+              background: 'rgba(17, 17, 20, 0.90)',
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(255, 255, 255, 0.10)',
+              borderRadius: '8px',
+              padding: '6px 12px',
               display: 'flex',
               alignItems: 'center',
-              gap: '12px',
-              boxShadow: '0 4px 20px rgba(0,0,0,0.5)'
+              gap: '12px'
             }}
           >
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px' }}>
               <span
                 style={{
-                  fontSize: '26px',
-                  fontWeight: 900,
+                  fontSize: '24px',
+                  fontWeight: 700,
                   fontFamily: 'var(--font-mono)',
-                  color: hud.speedKmh > 130 ? '#ef4444' : hud.speedKmh > 110 ? '#f59e0b' : '#00f0ff',
+                  fontVariantNumeric: 'tabular-nums',
+                  color: hud.speedKmh > 130 ? '#f87171' : hud.speedKmh > 110 ? '#fbbf24' : '#fafafa',
                   lineHeight: 1
                 }}
               >
                 {hud.speedKmh}
               </span>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>KM/H</span>
+              <span style={{ fontSize: '10px', color: '#a1a1aa', fontWeight: 600 }}>KM/H</span>
             </div>
 
-            <div style={{ width: '1px', height: '24px', background: 'rgba(255,255,255,0.12)' }} />
+            <div style={{ width: '1px', height: '22px', background: 'rgba(255,255,255,0.08)' }} />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -459,25 +482,25 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
                   style={{
                     padding: '1px 6px',
                     borderRadius: '4px',
-                    background: 'rgba(0, 240, 255, 0.15)',
-                    border: '1px solid rgba(0, 240, 255, 0.35)',
+                    background: 'rgba(56, 189, 248, 0.12)',
+                    border: '1px solid rgba(56, 189, 248, 0.28)',
                     fontSize: '10px',
-                    fontWeight: 800,
-                    color: '#00f0ff',
+                    fontWeight: 600,
+                    color: '#38bdf8',
                     fontFamily: 'var(--font-mono)'
                   }}
                 >
                   {hud.gear}
                 </span>
-                <span style={{ fontSize: '10px', color: '#cbd5e1', fontFamily: 'var(--font-mono)' }}>
+                <span style={{ fontSize: '10px', color: '#a1a1aa', fontFamily: 'var(--font-mono)' }}>
                   LANE {hud.currentLane}/4
                 </span>
               </div>
               <div
                 style={{
                   width: '72px',
-                  height: '4px',
-                  background: 'rgba(255,255,255,0.12)',
+                  height: '3px',
+                  background: 'rgba(255,255,255,0.10)',
                   borderRadius: '2px',
                   overflow: 'hidden'
                 }}
@@ -486,7 +509,7 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
                   style={{
                     width: `${Math.min(100, (hud.rpm / 7500) * 100)}%`,
                     height: '100%',
-                    background: hud.rpm > 6500 ? '#ef4444' : hud.rpm > 4800 ? '#f59e0b' : '#10b981',
+                    background: hud.rpm > 6500 ? '#f87171' : hud.rpm > 4800 ? '#fbbf24' : '#34d399',
                     transition: 'width 0.1s linear'
                   }}
                 />
@@ -497,32 +520,36 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
           {/* Center Gaze Focus Pill */}
           <div
             style={{
-              background: 'rgba(9, 13, 22, 0.85)',
+              background: 'rgba(17, 17, 20, 0.90)',
               backdropFilter: 'blur(10px)',
-              border: `1px solid ${driverGaze !== 'CENTER' ? 'rgba(16, 185, 129, 0.5)' : 'rgba(255, 255, 255, 0.12)'}`,
-              borderRadius: '20px',
-              padding: '5px 14px',
+              border: `1px solid ${driverGaze !== 'CENTER' ? 'rgba(52, 211, 153, 0.35)' : 'rgba(255, 255, 255, 0.08)'}`,
+              borderRadius: '9999px',
+              padding: '5px 12px',
               display: 'flex',
               alignItems: 'center',
-              gap: '8px',
+              gap: '7px',
               fontSize: '11px',
-              fontWeight: 700,
-              color: driverGaze !== 'CENTER' ? '#34d399' : '#cbd5e1'
+              fontFamily: 'var(--font-mono)',
+              fontWeight: 500,
+              color: driverGaze !== 'CENTER' ? '#34d399' : '#fafafa'
             }}
           >
-            <Eye size={13} color={driverGaze !== 'CENTER' ? '#10b981' : '#38bdf8'} />
-            <span>GAZE FOCUS: {driverGaze}</span>
+            <Eye size={13} color={driverGaze !== 'CENTER' ? '#34d399' : '#38bdf8'} />
+            <span>GAZE: {driverGaze}</span>
             {isSilenced && (
               <span
                 style={{
-                  background: 'rgba(16, 185, 129, 0.25)',
-                  color: '#10b981',
-                  padding: '1px 7px',
-                  borderRadius: '10px',
-                  fontSize: '10px'
+                  background: 'rgba(52, 211, 153, 0.14)',
+                  color: '#34d399',
+                  padding: '1px 6px',
+                  borderRadius: '9999px',
+                  fontSize: '10px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '3px'
                 }}
               >
-                ✓ SILENCED
+                <Check size={10} /> SILENCED
               </span>
             )}
           </div>
@@ -531,38 +558,39 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', pointerEvents: 'auto' }}>
             <div
               style={{
-                background: 'rgba(9, 13, 22, 0.86)',
+                background: 'rgba(17, 17, 20, 0.90)',
                 backdropFilter: 'blur(10px)',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-                borderRadius: '8px',
-                padding: '5px 11px',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '6px',
+                padding: '5px 10px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '10px'
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <ShieldCheck size={14} color="#10b981" />
-                <span style={{ fontSize: '12px', fontWeight: 800, color: '#fff', fontFamily: 'var(--font-mono)' }}>
+                <ShieldCheck size={13} color="#34d399" />
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#fafafa', fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}>
                   {hud.score}
                 </span>
               </div>
 
               {hud.streak > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                  <Flame size={14} color="#f59e0b" />
-                  <span style={{ fontSize: '11px', fontWeight: 800, color: '#f59e0b' }}>x{hud.streak}</span>
+                  <Flame size={13} color="#fbbf24" />
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#fbbf24', fontFamily: 'var(--font-mono)' }}>x{hud.streak}</span>
                 </div>
               )}
 
               {hud.damage > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Activity size={13} color={hud.damage > 50 ? '#ef4444' : '#f59e0b'} />
+                  <Activity size={13} color={hud.damage > 50 ? '#f87171' : '#fbbf24'} />
                   <span
                     style={{
                       fontSize: '10px',
-                      fontWeight: 700,
-                      color: hud.damage > 50 ? '#ef4444' : '#f59e0b'
+                      fontWeight: 600,
+                      fontFamily: 'var(--font-mono)',
+                      color: hud.damage > 50 ? '#f87171' : '#fbbf24'
                     }}
                   >
                     {hud.damage}%
@@ -571,211 +599,203 @@ export const GameWindow = forwardRef<GameWindowHandle, GameWindowProps>(
               )}
             </div>
 
-            {/* LKA Auto-Steer Toggle, Camera Mode, Reset & Fullscreen (Hidden during empirical study runs) */}
-            {!hideStudySpoilers && (
-              <>
-                <button
-                  onClick={handleAutoPilotToggle}
-                  className="btn"
-                  style={{
-                    padding: '6px 10px',
-                    borderRadius: '8px',
-                    background: hud.autoPilot ? 'rgba(16, 185, 129, 0.22)' : 'rgba(9, 13, 22, 0.86)',
-                    border: `1px solid ${hud.autoPilot ? '#10b981' : 'rgba(255, 255, 255, 0.16)'}`,
-                    color: hud.autoPilot ? '#34d399' : '#94a3b8',
-                    fontSize: '11px',
-                    fontWeight: 700
-                  }}
-                  title="Toggle ADAS Lane-Keep Assist Auto-Steer (Spacebar)"
-                >
-                  <Navigation size={13} />
-                  <span>{hud.autoPilot ? 'LKA: ON' : 'LKA: OFF'}</span>
-                </button>
+            <button
+              onClick={handleAutoPilotToggle}
+              className="btn"
+              style={{
+                padding: '6px 10px',
+                borderRadius: '6px',
+                background: hud.autoPilot ? 'rgba(52, 211, 153, 0.14)' : 'rgba(17, 17, 20, 0.90)',
+                border: `1px solid ${hud.autoPilot ? 'rgba(52, 211, 153, 0.35)' : 'rgba(255, 255, 255, 0.10)'}`,
+                color: hud.autoPilot ? '#34d399' : '#a1a1aa',
+                fontSize: '11px',
+                fontWeight: 500
+              }}
+              title="Toggle ADAS Lane-Keep Assist Auto-Steer (Spacebar)"
+            >
+              <Navigation size={13} />
+              <span>{hud.autoPilot ? 'LKA: ON' : 'LKA: OFF'}</span>
+            </button>
 
-                {/* Camera View Switcher Button */}
-                <button
-                  onClick={handleCameraToggle}
-                  className="btn"
-                  style={{
-                    padding: '6px 10px',
-                    borderRadius: '8px',
-                    background: 'rgba(9, 13, 22, 0.86)',
-                    border: '1px solid rgba(0, 240, 255, 0.35)',
-                    color: '#00f0ff',
-                    fontSize: '11px',
-                    fontWeight: 700
-                  }}
-                  title="Cycle Camera View: Cockpit / Chase / Hood (Key C)"
-                >
-                  <Camera size={13} />
-                  <span>
-                    {hud.cameraMode === 'cockpit'
-                      ? 'Cockpit'
-                      : hud.cameraMode === 'chase'
-                      ? 'Chase 360°'
-                      : 'Hood Cam'}
-                  </span>
-                </button>
+            <button
+              onClick={handleCameraToggle}
+              className="btn"
+              style={{
+                padding: '6px 10px',
+                borderRadius: '6px',
+                background: 'rgba(17, 17, 20, 0.90)',
+                border: '1px solid rgba(255, 255, 255, 0.10)',
+                color: '#fafafa',
+                fontSize: '11px',
+                fontWeight: 500
+              }}
+              title="Cycle Camera View: Cockpit / Chase / Hood (Key C)"
+            >
+              <Camera size={13} color="#38bdf8" />
+              <span>
+                {hud.cameraMode === 'cockpit'
+                  ? 'Cockpit'
+                  : hud.cameraMode === 'chase'
+                    ? 'Chase'
+                    : 'Hood'}
+              </span>
+            </button>
 
-                {/* Reset Traffic Button */}
-                <button
-                  onClick={() => engineRef.current?.reset()}
-                  className="btn"
-                  style={{
-                    padding: '6px 8px',
-                    borderRadius: '8px',
-                    background: 'rgba(9, 13, 22, 0.86)',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
-                    color: '#cbd5e1'
-                  }}
-                  title="Reset Highway Traffic & Score"
-                >
-                  <RotateCcw size={13} />
-                </button>
+            <button
+              onClick={() => engineRef.current?.reset()}
+              className="btn"
+              style={{
+                padding: '6px 8px',
+                borderRadius: '6px',
+                background: 'rgba(17, 17, 20, 0.90)',
+                border: '1px solid rgba(255, 255, 255, 0.10)',
+                color: '#a1a1aa'
+              }}
+              title="Reset Highway Traffic & Score"
+            >
+              <RotateCcw size={13} />
+            </button>
 
-                {/* Fullscreen Toggle */}
-                {onToggleFullscreen && (
-                  <button
-                    onClick={onToggleFullscreen}
-                    className="btn"
-                    style={{
-                      padding: '6px 8px',
-                      borderRadius: '8px',
-                      background: 'rgba(9, 13, 22, 0.86)',
-                      border: '1px solid rgba(255, 255, 255, 0.2)'
-                    }}
-                    title={isFullscreenMode ? 'Exit Fullscreen (Esc)' : 'Expand Fullscreen Driving Mode'}
-                  >
-                    {isFullscreenMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                  </button>
-                )}
-              </>
+            {onToggleFullscreen && (
+              <button
+                onClick={onToggleFullscreen}
+                className="btn"
+                style={{
+                  padding: '6px 8px',
+                  borderRadius: '6px',
+                  background: 'rgba(17, 17, 20, 0.90)',
+                  border: '1px solid rgba(255, 255, 255, 0.10)',
+                  color: '#fafafa'
+                }}
+                title={isFullscreenMode ? 'Exit Fullscreen (Esc)' : 'Expand Fullscreen Driving Mode'}
+              >
+                {isFullscreenMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
             )}
           </div>
         </div>
+        )}
 
         {/* Center AR-HUD Alert / Reaction Banner (Hidden during blind empirical study blocks to avoid directional spoilers) */}
         {!hideStudySpoilers && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '28%',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '6px',
-            pointerEvents: 'none',
-            zIndex: 11
-          }}
-        >
-          {hud.activeAlert ? (
-            <div
-              style={{
-                background: 'rgba(220, 38, 38, 0.92)',
-                border: '1px solid rgba(255, 255, 255, 0.6)',
-                boxShadow: '0 0 28px rgba(239, 68, 68, 0.85)',
-                backdropFilter: 'blur(8px)',
-                color: '#fff',
-                padding: '7px 16px',
-                borderRadius: '8px',
-                fontSize: '12px',
-                fontWeight: 800,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              <AlertTriangle size={16} />
-              <span>
-                {hud.activeAlert === 'left' && '⚠ LEFT BLIND SPOT HAZARD! LOOK LEFT (KEY 1 OR CLICK MIRROR)'}
-                {hud.activeAlert === 'right' && '⚠ RIGHT BLIND SPOT HAZARD! LOOK RIGHT (KEY 3 OR CLICK MIRROR)'}
-                {hud.activeAlert === 'rear' && '⚠ FAST TAILGATER BEHIND! CHECK REAR MIRROR (KEY 4 OR CLICK)'}
-              </span>
-            </div>
-          ) : collisionNotice ? (
-            <div
-              style={{
-                background: 'rgba(220, 38, 38, 0.95)',
-                border: '1px solid rgba(255, 255, 255, 0.6)',
-                boxShadow: '0 0 20px rgba(220, 38, 38, 0.8)',
-                color: '#fff',
-                padding: '6px 14px',
-                borderRadius: '6px',
-                fontSize: '11px',
-                fontWeight: 800,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '7px'
-              }}
-            >
-              <Zap size={15} color="#fbbf24" />
-              <span>{collisionNotice}</span>
-            </div>
-          ) : clearedNotice ? (
-            <div
-              style={{
-                background: 'rgba(16, 185, 129, 0.92)',
-                border: '1px solid rgba(16, 185, 129, 0.7)',
-                boxShadow: '0 0 20px rgba(16, 185, 129, 0.6)',
-                color: '#fff',
-                padding: '6px 14px',
-                borderRadius: '6px',
-                fontSize: '11px',
-                fontWeight: 800,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '7px'
-              }}
-            >
-              <CheckCircle2 size={15} />
-              <span>{clearedNotice}</span>
-            </div>
-          ) : null}
-        </div>
+          <div
+            style={{
+              position: 'absolute',
+              top: '28%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '6px',
+              pointerEvents: 'none',
+              zIndex: 11
+            }}
+          >
+            {hud.activeAlert ? (
+              <div
+                style={{
+                  background: 'rgba(17, 17, 20, 0.94)',
+                  border: '1px solid rgba(248, 113, 113, 0.45)',
+                  backdropFilter: 'blur(8px)',
+                  color: '#fafafa',
+                  padding: '6px 14px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <AlertTriangle size={14} color="#f87171" />
+                <span>
+                  {hud.activeAlert === 'left' && 'Left Blind Spot Hazard — Look Left (Key 1 or Click Mirror)'}
+                  {hud.activeAlert === 'right' && 'Right Blind Spot Hazard — Look Right (Key 3 or Click Mirror)'}
+                  {hud.activeAlert === 'rear' && 'Fast Tailgater Behind — Check Rear Mirror (Key 4 or Click)'}
+                </span>
+              </div>
+            ) : collisionNotice ? (
+              <div
+                style={{
+                  background: 'rgba(17, 17, 20, 0.94)',
+                  border: '1px solid rgba(248, 113, 113, 0.45)',
+                  color: '#fafafa',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '7px'
+                }}
+              >
+                <Zap size={14} color="#fbbf24" />
+                <span>{collisionNotice}</span>
+              </div>
+            ) : clearedNotice ? (
+              <div
+                style={{
+                  background: 'rgba(17, 17, 20, 0.94)',
+                  border: '1px solid rgba(52, 211, 153, 0.4)',
+                  color: '#fafafa',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '7px'
+                }}
+              >
+                <CheckCircle2 size={14} color="#34d399" />
+                <span>{clearedNotice}</span>
+              </div>
+            ) : null}
+          </div>
         )}
 
         {/* Bottom Driving & Gaze Controls Bar (Hidden in Empirical Study Mode) */}
         {!hideStudySpoilers && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '8px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            background: 'rgba(9, 13, 22, 0.86)',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255, 255, 255, 0.12)',
-            borderRadius: '20px',
-            padding: '5px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            fontSize: '10px',
-            color: 'var(--text-muted)',
-            pointerEvents: 'none',
-            whiteSpace: 'nowrap',
-            zIndex: 10
-          }}
-        >
-          <span>
-            <strong style={{ color: '#00f0ff' }}>W/A/S/D</strong> or <strong style={{ color: '#00f0ff' }}>Arrows</strong> Drive
-          </span>
-          <span>•</span>
-          <span>
-            <strong style={{ color: '#38bdf8' }}>Space</strong> LKA Auto-Steer
-          </span>
-          <span>•</span>
-          <span>
-            <strong style={{ color: '#38bdf8' }}>C</strong> Camera ({hud.cameraMode.toUpperCase()})
-          </span>
-          <span>•</span>
-          <span style={{ color: '#10b981' }}>
-            <strong>Keys 1 / 2 / 3 / 4</strong> or <strong>Click Mirror</strong> Simulate Gaze
-          </span>
-        </div>
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '8px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(17, 17, 20, 0.90)',
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius: '9999px',
+              padding: '5px 14px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              fontSize: '10px',
+              fontFamily: 'var(--font-mono)',
+              color: '#a1a1aa',
+              pointerEvents: 'none',
+              whiteSpace: 'nowrap',
+              zIndex: 10
+            }}
+          >
+            <span>
+              <strong style={{ color: '#fafafa' }}>W/A/S/D</strong> Drive
+            </span>
+            <span style={{ opacity: 0.35 }}>|</span>
+            <span>
+              <strong style={{ color: '#38bdf8' }}>Space</strong> LKA
+            </span>
+            <span style={{ opacity: 0.35 }}>|</span>
+            <span>
+              <strong style={{ color: '#38bdf8' }}>C</strong> {hud.cameraMode.toUpperCase()}
+            </span>
+            <span style={{ opacity: 0.35 }}>|</span>
+            <span style={{ color: '#34d399' }}>
+              <strong>1/2/3/4</strong> or <strong>Click Mirror</strong> Gaze Sim
+            </span>
+          </div>
         )}
       </div>
     );

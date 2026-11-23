@@ -102,6 +102,12 @@ export class InBrowserVisionService {
   private lastIrisRatio: number | null = null;
   private lastDiagnostics: InBrowserVisionDiagnostics | null = null;
 
+  // Per-participant neutral gaze calibration offsets
+  private baselineIris = 0.50;
+  private baselineYaw = 0;
+  private baselinePitch = 0;
+  private isCalibrated = false;
+
   constructor() {}
 
   /**
@@ -144,11 +150,64 @@ export class InBrowserVisionService {
     }
   }
 
+  public getMediaStream(): MediaStream | null {
+    return this.stream;
+  }
+
+  /**
+   * Re-binds the active webcam MediaStream to a newly mounted <video> element
+   * without restarting MediaPipe or dropping the camera stream.
+   */
+  public attachVideoElement(videoElement: HTMLVideoElement): boolean {
+    if (!this.stream || !this.isRunning) return false;
+    this.videoEl = videoElement;
+    if (videoElement.srcObject !== this.stream) {
+      videoElement.srcObject = this.stream;
+    }
+    videoElement.play().catch(() => {});
+    return true;
+  }
+
+  public calibrateCenter(): { iris: number; yaw: number; pitch: number } {
+    this.baselineIris = this.lastIrisRatio ?? 0.50;
+    this.baselineYaw = this.smoothedYaw;
+    this.baselinePitch = this.smoothedPitch;
+    this.isCalibrated = true;
+    this.stabilizer.reset('CENTER');
+    return {
+      iris: this.baselineIris,
+      yaw: this.baselineYaw,
+      pitch: this.baselinePitch
+    };
+  }
+
+  public resetCalibration() {
+    this.baselineIris = 0.50;
+    this.baselineYaw = 0;
+    this.baselinePitch = 0;
+    this.isCalibrated = false;
+  }
+
+  public getCalibrationState() {
+    return {
+      isCalibrated: this.isCalibrated,
+      baselineIris: this.baselineIris,
+      baselineYaw: this.baselineYaw,
+      baselinePitch: this.baselinePitch
+    };
+  }
+
+  public resetStabilizer(zone: GazeZone = 'CENTER') {
+    this.stabilizer.reset(zone);
+  }
+
   /**
    * Start camera and real-time inference loop
    */
   public async start(videoElement: HTMLVideoElement): Promise<boolean> {
-    if (this.isRunning) return true;
+    if (this.isRunning && this.stream) {
+      return this.attachVideoElement(videoElement);
+    }
 
     const initialized = await this.init();
     if (!initialized) {
@@ -208,6 +267,7 @@ export class InBrowserVisionService {
 
     this.lastLandmarks = null;
     this.lastIrisRatio = null;
+    this.resetCalibration();
     console.log('[InBrowserVision] Camera tracking stopped.');
   }
 
@@ -263,11 +323,16 @@ export class InBrowserVisionService {
           };
           this.lastDiagnostics = diagnostics;
 
+          const hasMatrix = Boolean(
+            results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0
+          );
+          const frameConfidence = hasMatrix ? 0.95 : 0.85;
+
           const msg: GazeUpdateMessage = {
             type: 'GAZE_UPDATE',
             timestamp: now / 1000,
             gaze_zone: stab.confirmedZone,
-            confidence: 0.96,
+            confidence: frameConfidence,
             head_pose: pose,
             dwell_time_ms: stab.elapsedMs,
             face_detected: true,
@@ -435,26 +500,28 @@ export class InBrowserVisionService {
   }
 
   /**
-   * Classify Compound Head Pose & Iris Gaze into ADAS Mirror Zones
-   * Pitch: positive = looking UP (Rear Mirror)
-   * Yaw: negative = looking LEFT (Left Side Mirror), positive = looking RIGHT (Right Side Mirror)
+   * Classify Compound Head Pose & Iris Gaze into ADAS Mirror Zones relative to neutral center calibration.
    */
   public classifyZone(yawDeg: number, pitchDeg: number, irisRatio: number | null): GazeZone {
-    // 1. Rear-View Mirror Check (Driver tilts head up toward center mirror)
-    if (pitchDeg >= 12.0 && Math.abs(yawDeg) <= 18.0) {
+    const relYaw = yawDeg - this.baselineYaw;
+    const relPitch = pitchDeg - this.baselinePitch;
+    const relIris = irisRatio !== null ? irisRatio - this.baselineIris : null;
+
+    // 1. Rear-View Mirror Check (Driver looks/tilts upward toward center mirror)
+    if (relPitch >= 10.0 && Math.abs(relYaw) <= 20.0) {
       return 'REAR_MIRROR';
     }
 
-    // Side gaze is determined by the eyes independently of head orientation.
-    if (irisRatio !== null && irisRatio <= 0.45) {
+    // 2. Side Mirrors (compound iris glance OR deliberate head turn left/right)
+    if ((relIris !== null && relIris <= -0.055) || relYaw <= -14.0) {
       return 'LEFT_MIRROR';
     }
 
-    if (irisRatio !== null && irisRatio >= 0.55) {
+    if ((relIris !== null && relIris >= 0.055) || relYaw >= 14.0) {
       return 'RIGHT_MIRROR';
     }
 
-    // 4. Default: Center Windshield / Forward Road
+    // 3. Default: Center Windshield / Forward Road
     return 'CENTER';
   }
 
@@ -487,20 +554,20 @@ export class InBrowserVisionService {
     };
 
     // Draw Nose & Chin
-    drawPoint(this.lastLandmarks[LANDMARK_INDICES.noseTip], '#00f0ff', 3);
-    drawPoint(this.lastLandmarks[LANDMARK_INDICES.chin], 'rgba(255, 255, 255, 0.5)', 2);
+    drawPoint(this.lastLandmarks[LANDMARK_INDICES.noseTip], '#38bdf8', 3);
+    drawPoint(this.lastLandmarks[LANDMARK_INDICES.chin], 'rgba(255, 255, 255, 0.45)', 2);
 
     // Draw Eye Corners
-    drawPoint(this.lastLandmarks[LANDMARK_INDICES.leftEyeOuter], '#38bdf8', 2);
-    drawPoint(this.lastLandmarks[LANDMARK_INDICES.leftEyeInner], '#38bdf8', 2);
-    drawPoint(this.lastLandmarks[LANDMARK_INDICES.rightEyeOuter], '#38bdf8', 2);
-    drawPoint(this.lastLandmarks[LANDMARK_INDICES.rightEyeInner], '#38bdf8', 2);
+    drawPoint(this.lastLandmarks[LANDMARK_INDICES.leftEyeOuter], '#a1a1aa', 2);
+    drawPoint(this.lastLandmarks[LANDMARK_INDICES.leftEyeInner], '#a1a1aa', 2);
+    drawPoint(this.lastLandmarks[LANDMARK_INDICES.rightEyeOuter], '#a1a1aa', 2);
+    drawPoint(this.lastLandmarks[LANDMARK_INDICES.rightEyeInner], '#a1a1aa', 2);
 
-    // Draw Irises (Glowing Emerald)
+    // Draw Irises
     const leftIris = this.lastLandmarks[IRIS_INDICES.left[0]];
     const rightIris = this.lastLandmarks[IRIS_INDICES.right[0]];
-    if (leftIris) drawPoint(leftIris, '#10b981', 4);
-    if (rightIris) drawPoint(rightIris, '#10b981', 4);
+    if (leftIris) drawPoint(leftIris, '#34d399', 4);
+    if (rightIris) drawPoint(rightIris, '#34d399', 4);
 
     ctx.restore();
   }

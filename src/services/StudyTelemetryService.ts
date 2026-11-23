@@ -78,6 +78,21 @@ export function isValidParticipantId(pid: string): boolean {
   return /^P_\d{2,3}$/.test(pid.trim());
 }
 
+/**
+ * Normalizes flexible inputs like "1", "p1", "P_1", "12" into canonical "P_01", "P_12", etc.
+ */
+export function normalizeParticipantId(raw: string): string {
+  const cleaned = raw.trim().toUpperCase();
+  const match = cleaned.match(/^(?:P_?)?(\d{1,3})$/);
+  if (!match) return cleaned;
+  const num = parseInt(match[1], 10);
+  if (Number.isNaN(num)) return cleaned;
+  if (num < 100) {
+    return `P_${String(num).padStart(2, '0')}`;
+  }
+  return `P_${num}`;
+}
+
 export function loadAllLocalSessions(): StudySessionBundle[] {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -93,6 +108,30 @@ export function loadAllLocalSessions(): StudySessionBundle[] {
 export function loadLocalSession(participantId: string): StudySessionBundle | null {
   const all = loadAllLocalSessions();
   return all.find((s) => s.participant_id === participantId) || null;
+}
+
+export function hasLocalSession(participantId: string): boolean {
+  return loadLocalSession(participantId) !== null;
+}
+
+/**
+ * Suggests the next unused Participant ID (P_01..P_999) based on local browser sessions,
+ * ignoring synthetic P_00 self-test sessions.
+ */
+export function suggestNextParticipantId(): string {
+  const usedNums = new Set<number>();
+  loadAllLocalSessions().forEach((s) => {
+    const m = s.participant_id.match(/^P_(\d{2,3})$/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n >= 1) usedNums.add(n);
+    }
+  });
+  let candidate = 1;
+  while (usedNums.has(candidate) && candidate < 999) {
+    candidate += 1;
+  }
+  return candidate < 100 ? `P_${String(candidate).padStart(2, '0')}` : `P_${candidate}`;
 }
 
 export function saveSessionLocally(bundle: StudySessionBundle): void {

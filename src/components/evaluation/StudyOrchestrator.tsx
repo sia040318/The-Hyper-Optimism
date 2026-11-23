@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import {
-  CONDITION_META,
   Part1Condition,
   Part2Condition,
   STUDY_PARAMETERS,
   SURVEY_QUESTIONS,
   StudyConditionType,
-  StudyPartNumber
+  StudyPartNumber,
+  getBlindedConditionLabel
 } from '../../config/studyConfig';
 import { SpatialAudioEngine } from '../../audio/SpatialAudioEngine';
 import { GameWindowHandle } from '../../game';
@@ -22,31 +23,35 @@ import {
   StudySessionBundle,
   StudySurveyRecord,
   StudyTrialRecord,
-  downloadSessionJson,
-  exportAllToTrialsCsv,
   isValidParticipantId,
+  loadLocalSession,
+  normalizeParticipantId,
   saveSessionLocally,
-  syncBlockToCloud,
-  triggerFileDownload
+  suggestNextParticipantId,
+  syncBlockToCloud
 } from '../../services/StudyTelemetryService';
 import { ProgressiveSurveyModal } from './ProgressiveSurveyModal';
+import { StudyCalibrationStep } from './StudyCalibrationStep';
+import { StudyCompleteView } from './StudyCompleteView';
 import { GazeZone, InBrowserVisionDiagnostics } from '../../types/gaze';
 import { ProxyTarget } from '../../types/threats';
+import { Button } from '@/components/ui/button';
 import {
-  Activity,
-  AlertTriangle,
-  Camera,
-  CheckCircle2,
-  Cloud,
-  CloudOff,
-  Download,
-  Eye,
-  Headphones,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  LogOut,
   Play,
-  RefreshCw,
-  ShieldCheck,
-  Volume2,
-  X
+  ShieldCheck
 } from 'lucide-react';
 
 export type StudyVisualMode = 'OFF' | 'PART1_BLIND_AUDIO' | 'PART2_MIRROR_HAZARD';
@@ -59,10 +64,11 @@ interface StudyOrchestratorProps {
   audioEngine: SpatialAudioEngine;
   gameWindowRef: React.RefObject<GameWindowHandle | null>;
   currentGaze: GazeZone;
+  volume: number;
+  onVolumeChange: (vol: number) => void;
   onSimulateGaze: (zone: GazeZone, force?: boolean) => void;
   onAudioActiveChange: (active: boolean) => void;
   onStudyVisualModeChange: (mode: StudyVisualMode) => void;
-  onOpenLegacySandboxStudy?: () => void;
 }
 
 type OrchestratorPhase =
@@ -74,7 +80,7 @@ type OrchestratorPhase =
   | 'PART2_RUNNING'
   | 'STUDY_COMPLETE';
 
-type TrialSubState = 'INTER_TRIAL' | 'AWAITING_RESPONSE' | 'TRIAL_FEEDBACK';
+type TrialSubState = 'INTER_TRIAL' | 'WAITING_FOR_CENTER' | 'AWAITING_RESPONSE' | 'TRIAL_FEEDBACK';
 
 function getDirectionFromKey(key: string): ProxyTarget | null {
   if (key === 'w' || key === 'W' || key === 'ArrowUp' || key === '2') return 'FRONT_WINDSHIELD';
@@ -100,39 +106,44 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
   audioEngine,
   gameWindowRef,
   currentGaze,
+  volume,
+  onVolumeChange,
   onSimulateGaze,
   onAudioActiveChange,
-  onStudyVisualModeChange,
-  onOpenLegacySandboxStudy
+  onStudyVisualModeChange
 }) => {
   // Participant & Passcode State
-  const [participantId, setParticipantId] = useState(
-    initialParticipantId && isValidParticipantId(initialParticipantId) ? initialParticipantId : 'P_01'
+  const [participantId, setParticipantId] = useState(() =>
+    initialParticipantId && isValidParticipantId(initialParticipantId)
+      ? initialParticipantId
+      : suggestNextParticipantId()
   );
   const [studyPasscode, setStudyPasscode] = useState(
     initialPasscode || STUDY_PARAMETERS.defaultStudyPasscode
   );
   const [phase, setPhase] = useState<OrchestratorPhase>('STEP0_GATE');
 
-  // Step 0 Calibration Gate State
+  // Step 0 Calibration State
   const [audioOutputLabel, setAudioOutputLabel] = useState('Default Stereo Output');
   const [leftEarTested, setLeftEarTested] = useState(false);
   const [rightEarTested, setRightEarTested] = useState(false);
-  const [stereoConfirmed, setStereoConfirmed] = useState(false);
+  const [stereoOverride, setStereoOverride] = useState(false);
 
-  const [isWebcamRunning, setIsWebcamRunning] = useState(false);
+  const [trackingMode, setTrackingMode] = useState<'WEBCAM' | 'SIMULATION'>(() =>
+    inBrowserVision.getIsRunning() ? 'WEBCAM' : 'WEBCAM'
+  );
+  const [isWebcamRunning, setIsWebcamRunning] = useState(() => inBrowserVision.getIsRunning());
+  const [webcamLoading, setWebcamLoading] = useState(false);
   const [webcamLabel, setWebcamLabel] = useState('In-Browser Webcam (MediaPipe)');
   const [webcamError, setWebcamError] = useState<string | null>(null);
-  const [useSimFallback, setUseSimFallback] = useState(false);
   const [visionDiag, setVisionDiag] = useState<InBrowserVisionDiagnostics | null>(null);
   const [faceDetectedNow, setFaceDetectedNow] = useState(false);
+  const [isCalibrated, setIsCalibrated] = useState(() => inBrowserVision.getCalibrationState().isCalibrated);
 
-  // Practice Round State (10s interactive check)
-  const [isPracticeActive, setIsPracticeActive] = useState(false);
-  const [practiceSecondsLeft, setPracticeSecondsLeft] = useState(10);
+  // Instant Readiness Check State (no forced 10s wait)
   const [practiceKeyDone, setPracticeKeyDone] = useState(false);
   const [practiceGazeDone, setPracticeGazeDone] = useState(false);
-  const [practiceComplete, setPracticeComplete] = useState(false);
+  const [practiceSkipped, setPracticeSkipped] = useState(false);
 
   // Study Schedule & Block State
   const [part1Order, setPart1Order] = useState<Part1Condition[]>(() =>
@@ -149,6 +160,7 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
   const [trialSubState, setTrialSubState] = useState<TrialSubState>('INTER_TRIAL');
   const [showGazeFallbackPrompt, setShowGazeFallbackPrompt] = useState(false);
   const [statusBanner, setStatusBanner] = useState<string>('Stand by...');
+  const [isExitConfirmOpen, setIsExitConfirmOpen] = useState(false);
 
   // Progressive Survey State
   const [surveyModalOpen, setSurveyModalOpen] = useState(false);
@@ -161,18 +173,21 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     Record<StudyPartNumber, Record<string, Record<string, number>>>
   >({ 1: {}, 2: {} });
 
-  // Session & Sync Telemetry
+  // Session & Background Sync Telemetry
   const [sessionBundle, setSessionBundle] = useState<StudySessionBundle | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
 
-  // Persistent Webcam Video & Overlay Refs (never unmounted while Orchestrator is open)
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Video & Overlay Refs (Step 0 inline vs Highway PIP)
+  const step0VideoRef = useRef<HTMLVideoElement | null>(null);
+  const step0CanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pipVideoRef = useRef<HTMLVideoElement | null>(null);
+  const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Trial Timing & CV Sampling Refs
+  // Trial Timing & Cumulative CV Sampling Refs (fixes stale closures & overwriting metrics)
   const timerIdsRef = useRef<number[]>([]);
   const trialOnsetPerfRef = useRef<number>(0);
+  const trialOnsetWallMsRef = useRef<number>(Date.now());
   const trialFirstRespMsRef = useRef<number | null>(null);
   const trialWrongAttemptsRef = useRef<number>(0);
   const trialConfidenceSamplesRef = useRef<number[]>([]);
@@ -181,42 +196,54 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
   const lastSamplePerfRef = useRef<number>(0);
   const trialResolvedRef = useRef<boolean>(false);
   const part2ConfirmedRtRef = useRef<number | null>(null);
+
+  const sessionFpsSumRef = useRef<number>(0);
+  const sessionFpsCountRef = useRef<number>(0);
+  const sessionConfSumRef = useRef<number>(0);
+  const sessionConfCountRef = useRef<number>(0);
+
   const currentGazeRef = useRef<GazeZone>(currentGaze);
   const activePlanRef = useRef<ScheduledBlockPlan | null>(null);
   const currentTrialIdxRef = useRef<number>(0);
   const trialSubStateRef = useRef<TrialSubState>('INTER_TRIAL');
   const sessionBundleRef = useRef<StudySessionBundle | null>(null);
   const phaseRef = useRef<OrchestratorPhase>(phase);
+  const part1OrderRef = useRef<Part1Condition[]>(part1Order);
+  const part2OrderRef = useRef<Part2Condition[]>(part2Order);
+  const part1BlockIdxRef = useRef<number>(part1BlockIdx);
+  const part2BlockIdxRef = useRef<number>(part2BlockIdx);
+  const isWebcamRunningRef = useRef<boolean>(isWebcamRunning);
+  const useSimFallbackRef = useRef<boolean>(trackingMode === 'SIMULATION');
 
-  useEffect(() => {
-    currentGazeRef.current = currentGaze;
-  }, [currentGaze]);
+  useEffect(() => { currentGazeRef.current = currentGaze; }, [currentGaze]);
+  useEffect(() => { activePlanRef.current = activePlan; }, [activePlan]);
+  useEffect(() => { currentTrialIdxRef.current = currentTrialIdx; }, [currentTrialIdx]);
+  useEffect(() => { trialSubStateRef.current = trialSubState; }, [trialSubState]);
+  useEffect(() => { sessionBundleRef.current = sessionBundle; }, [sessionBundle]);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => { part1OrderRef.current = part1Order; }, [part1Order]);
+  useEffect(() => { part2OrderRef.current = part2Order; }, [part2Order]);
+  useEffect(() => { part1BlockIdxRef.current = part1BlockIdx; }, [part1BlockIdx]);
+  useEffect(() => { part2BlockIdxRef.current = part2BlockIdx; }, [part2BlockIdx]);
+  useEffect(() => { isWebcamRunningRef.current = isWebcamRunning; }, [isWebcamRunning]);
+  useEffect(() => { useSimFallbackRef.current = trackingMode === 'SIMULATION'; }, [trackingMode]);
 
-  useEffect(() => {
-    activePlanRef.current = activePlan;
-  }, [activePlan]);
-
-  useEffect(() => {
-    currentTrialIdxRef.current = currentTrialIdx;
-  }, [currentTrialIdx]);
-
-  useEffect(() => {
-    trialSubStateRef.current = trialSubState;
-  }, [trialSubState]);
-
-  useEffect(() => {
-    sessionBundleRef.current = sessionBundle;
-  }, [sessionBundle]);
-
-  useEffect(() => {
-    phaseRef.current = phase;
-  }, [phase]);
+  const stereoConfirmed = (leftEarTested && rightEarTested) || stereoOverride;
+  const useSimFallback = trackingMode === 'SIMULATION';
+  const isRunningOnHighway = phase === 'PART1_RUNNING' || phase === 'PART2_RUNNING';
 
   // Keep orders updated when participantId changes in Step 0
   useEffect(() => {
     setPart1Order(getPart1ConditionOrder(participantId));
     setPart2Order(getPart2ConditionOrder(participantId));
   }, [participantId]);
+
+  const existingLocalSession = useMemo(() => {
+    const clean = participantId.trim().toUpperCase();
+    if (!isValidParticipantId(clean) || clean === 'P_00') return null;
+    if (sessionBundle && sessionBundle.participant_id === clean) return null;
+    return loadLocalSession(clean);
+  }, [participantId, sessionBundle]);
 
   const clearAllTimers = useCallback(() => {
     timerIdsRef.current.forEach((id) => {
@@ -232,9 +259,26 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     return id;
   }, []);
 
-  // Detect Audio Output & Video Devices on mount
+  // Re-attach existing MediaStream to active <video> node whenever phase or webcam state changes
+  useEffect(() => {
+    if (!isOpen || !isWebcamRunning) return;
+    const targetVideo = phase === 'STEP0_GATE' ? step0VideoRef.current : isRunningOnHighway ? pipVideoRef.current : null;
+    if (targetVideo) {
+      inBrowserVision.attachVideoElement(targetVideo);
+    }
+  }, [isOpen, isWebcamRunning, phase, isRunningOnHighway, trackingMode]);
+
+  // Ambient engine audio ONLY during active driving trials (never loud drone during Step 0 / surveys!)
   useEffect(() => {
     if (!isOpen) return;
+    const activeDriving = isRunningOnHighway && !surveyModalOpen && !isExitConfirmOpen;
+    audioEngine.setAmbientEnabled(activeDriving);
+  }, [isOpen, isRunningOnHighway, surveyModalOpen, isExitConfirmOpen, audioEngine]);
+
+  // Detect Audio Output & Video Devices on open
+  useEffect(() => {
+    if (!isOpen) return;
+    setIsWebcamRunning(inBrowserVision.getIsRunning());
     if (navigator.mediaDevices?.enumerateDevices) {
       navigator.mediaDevices
         .enumerateDevices()
@@ -251,7 +295,6 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
   // Subscribe to InBrowserVision telemetry when orchestrator is open
   useEffect(() => {
     if (!isOpen) return;
-    setIsWebcamRunning(inBrowserVision.getIsRunning());
 
     const unsub = inBrowserVision.subscribe((msg) => {
       setFaceDetectedNow(msg.face_detected);
@@ -268,13 +311,15 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
         const dt = lastSamplePerfRef.current > 0 ? Math.min(120, now - lastSamplePerfRef.current) : 0;
         lastSamplePerfRef.current = now;
 
-        if (msg.face_detected) {
-          trialConfidenceSamplesRef.current.push(msg.confidence);
-        } else {
-          trialConfidenceSamplesRef.current.push(0);
-        }
+        const conf = msg.face_detected ? msg.confidence : 0;
+        trialConfidenceSamplesRef.current.push(conf);
+        sessionConfSumRef.current += conf;
+        sessionConfCountRef.current += 1;
+
         if (msg.diagnostics?.fps) {
           trialFpsSamplesRef.current.push(msg.diagnostics.fps);
+          sessionFpsSumRef.current += msg.diagnostics.fps;
+          sessionFpsCountRef.current += 1;
         }
         if (msg.gaze_zone !== 'CENTER' && dt > 0) {
           trialEyesOffRoadMsRef.current += dt;
@@ -284,16 +329,14 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
 
     let rafId: number;
     const drawOverlay = () => {
-      if (inBrowserVision.getIsRunning() && canvasRef.current && videoRef.current) {
-        const v = videoRef.current;
-        const c = canvasRef.current;
-        if (v.videoWidth > 0 && v.videoHeight > 0) {
-          if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
-            c.width = v.videoWidth;
-            c.height = v.videoHeight;
-          }
-          inBrowserVision.drawDebugOverlay(c);
+      const v = phaseRef.current === 'STEP0_GATE' ? step0VideoRef.current : pipVideoRef.current;
+      const c = phaseRef.current === 'STEP0_GATE' ? step0CanvasRef.current : pipCanvasRef.current;
+      if (inBrowserVision.getIsRunning() && c && v && v.videoWidth > 0 && v.videoHeight > 0) {
+        if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
+          c.width = v.videoWidth;
+          c.height = v.videoHeight;
         }
+        inBrowserVision.drawDebugOverlay(c);
       }
       rafId = requestAnimationFrame(drawOverlay);
     };
@@ -310,6 +353,7 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     if (!isOpen) {
       clearAllTimers();
       audioEngine.stopStudyTrialAlert();
+      audioEngine.setAmbientEnabled(false);
       audioEngine.setStudyAudioMode(null);
       onStudyVisualModeChange('OFF');
       gameWindowRef.current?.setStudyAutopilotMode(false, false);
@@ -318,16 +362,19 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
 
   const handleStartWebcam = async () => {
     setWebcamError(null);
-    if (!videoRef.current) return;
+    if (!step0VideoRef.current) return;
     if (inBrowserVision.getIsRunning()) {
+      inBrowserVision.attachVideoElement(step0VideoRef.current);
       setIsWebcamRunning(true);
+      setTrackingMode('WEBCAM');
       return;
     }
-    const ok = await inBrowserVision.start(videoRef.current);
+    setWebcamLoading(true);
+    const ok = await inBrowserVision.start(step0VideoRef.current);
+    setWebcamLoading(false);
     if (ok) {
       setIsWebcamRunning(true);
-      setUseSimFallback(false);
-      // Refresh device label after permission grant
+      setTrackingMode('WEBCAM');
       navigator.mediaDevices
         ?.enumerateDevices()
         .then((devices) => {
@@ -338,73 +385,71 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
         })
         .catch(() => {});
     } else {
-      setWebcamError(
-        'Webcam access blocked or unavailable. You may enable Keyboard/Click Simulation Fallback below.'
-      );
+      setWebcamError('Webcam access denied or unavailable. Switch to Key / Click mode above to continue.');
     }
   };
 
-  // 10s Interactive Practice Round
-  const handleStartPractice = async () => {
-    await audioEngine.start();
-    onAudioActiveChange(true);
-    audioEngine.setStudyAudioMode('SPATIAL_3D');
-    setIsPracticeActive(true);
-    setPracticeSecondsLeft(Math.round(STUDY_PARAMETERS.practiceDurationMs / 1000));
-    setPracticeKeyDone(false);
-    setPracticeGazeDone(false);
-    setPracticeComplete(false);
-
-    // Play a gentle directional sample cue
-    audioEngine.testDirection('LEFT_MIRROR');
-
-    const startTime = Date.now();
-    const interval = window.setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const rem = Math.max(0, Math.ceil((STUDY_PARAMETERS.practiceDurationMs - elapsed) / 1000));
-      setPracticeSecondsLeft(rem);
-      if (elapsed >= STUDY_PARAMETERS.practiceDurationMs) {
-        clearInterval(interval);
-        setIsPracticeActive(false);
-        setPracticeComplete(true);
-      }
-    }, 250);
-    timerIdsRef.current.push(interval);
+  const handleCalibrateCenter = () => {
+    inBrowserVision.calibrateCenter();
+    setIsCalibrated(true);
+    audioEngine.ensureReadyWithoutAmbient().then(() => audioEngine.playAcknowledgeEarcon());
   };
 
-  // Track Practice Round responses (WASD + Gaze dwell)
+  // Step 0 Readiness Check Listeners (no forced 10s timer)
   useEffect(() => {
-    if (!isPracticeActive) return;
-    if (currentGaze === 'LEFT_MIRROR' || currentGaze === 'RIGHT_MIRROR' || currentGaze === 'REAR_MIRROR') {
-      if (!practiceGazeDone) {
-        audioEngine.playAcknowledgeEarcon();
-        setPracticeGazeDone(true);
-      }
+    if (!isOpen || phase !== 'STEP0_GATE') return;
+    if (
+      (currentGaze === 'LEFT_MIRROR' || currentGaze === 'RIGHT_MIRROR' || currentGaze === 'REAR_MIRROR') &&
+      !practiceGazeDone
+    ) {
+      audioEngine.ensureReadyWithoutAmbient().then(() => audioEngine.playAcknowledgeEarcon());
+      setPracticeGazeDone(true);
     }
-  }, [isPracticeActive, currentGaze, practiceGazeDone, audioEngine]);
+  }, [isOpen, phase, currentGaze, practiceGazeDone, audioEngine]);
 
   useEffect(() => {
-    if (!isPracticeActive) return;
+    if (!isOpen || phase !== 'STEP0_GATE') return;
     const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (getDirectionFromKey(e.key)) {
-        e.preventDefault();
         setPracticeKeyDone(true);
       }
       const gaze = getMirrorKeyGaze(e.key);
-      if (gaze && useSimFallback) {
-        onSimulateGaze(gaze);
+      if (gaze && trackingMode === 'SIMULATION') {
+        onSimulateGaze(gaze, true);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isPracticeActive, useSimFallback, onSimulateGaze]);
+  }, [isOpen, phase, trackingMode, onSimulateGaze]);
+
+  // --- BLOCK COMPLETION & PROGRESSIVE SURVEY HANDLER ---
+  const finishBlockAndOpenSurvey = useCallback(
+    (plan: ScheduledBlockPlan) => {
+      clearAllTimers();
+      audioEngine.stopStudyTrialAlert();
+      audioEngine.setAmbientEnabled(false);
+      gameWindowRef.current?.clearStudyHazards(false);
+
+      const orderList = plan.part === 1 ? part1OrderRef.current : part2OrderRef.current;
+      // Use plan.conditionOrder (1-based) to avoid any stale state index closure bug!
+      const completedForPart = orderList.slice(0, plan.conditionOrder);
+
+      setSurveyPart(plan.part);
+      setSurveyCompletedConds(completedForPart);
+      setSurveyModalOpen(true);
+    },
+    [audioEngine, clearAllTimers, gameWindowRef]
+  );
 
   // --- INITIALIZE STUDY SESSION & ENTER PART 1 ---
   const handleBeginEmpiricalStudy = async () => {
-    const cleanPid = participantId.trim().toUpperCase();
+    const cleanPid = normalizeParticipantId(participantId);
+    setParticipantId(cleanPid);
     if (!isValidParticipantId(cleanPid)) return;
 
-    await audioEngine.start();
+    await audioEngine.ensureReadyWithoutAmbient();
     onAudioActiveChange(true);
     audioEngine.stopStudyTrialAlert();
 
@@ -412,13 +457,20 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     const p2Order = getPart2ConditionOrder(cleanPid);
     setPart1Order(p1Order);
     setPart2Order(p2Order);
+    part1OrderRef.current = p1Order;
+    part2OrderRef.current = p2Order;
+
+    sessionFpsSumRef.current = 0;
+    sessionFpsCountRef.current = 0;
+    sessionConfSumRef.current = 0;
+    sessionConfCountRef.current = 0;
 
     const hardwareInfo: StudyHardwareInfo = {
       audio_output_device: audioOutputLabel,
       webcam_label: isWebcamRunning ? webcamLabel : 'Simulation Fallback',
       webcam_fps_avg: visionDiag?.fps || 0,
-      cv_confidence_avg: isWebcamRunning ? 0.96 : 1.0,
-      input_mode: isWebcamRunning ? 'WEBCAM_MEDIAPIPE' : 'SIMULATION_FALLBACK',
+      cv_confidence_avg: isWebcamRunning ? 0.95 : 1.0,
+      input_mode: isWebcamRunning && trackingMode === 'WEBCAM' ? 'WEBCAM_MEDIAPIPE' : 'SIMULATION_FALLBACK',
       user_agent: navigator.userAgent
     };
 
@@ -439,8 +491,11 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
 
     saveSessionLocally(initialBundle);
     setSessionBundle(initialBundle);
+    sessionBundleRef.current = initialBundle;
     setPart1BlockIdx(0);
     setPart2BlockIdx(0);
+    part1BlockIdxRef.current = 0;
+    part2BlockIdxRef.current = 0;
     setInitialScoresMap({ 1: {}, 2: {} });
     setCurrentScoresMap({ 1: {}, 2: {} });
 
@@ -449,7 +504,112 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     setPhase('PART1_READY');
   };
 
+  // --- RESUME EXISTING LOCAL SESSION ---
+  const handleResumeExistingSession = async () => {
+    if (!existingLocalSession) return;
+    await audioEngine.ensureReadyWithoutAmbient();
+    onAudioActiveChange(true);
+    audioEngine.stopStudyTrialAlert();
+
+    const bundle = existingLocalSession;
+    const p1Ord = bundle.part1_condition_order?.length
+      ? bundle.part1_condition_order
+      : getPart1ConditionOrder(bundle.participant_id);
+    const p2Ord = bundle.part2_condition_order?.length
+      ? bundle.part2_condition_order
+      : getPart2ConditionOrder(bundle.participant_id);
+
+    setPart1Order(p1Ord);
+    setPart2Order(p2Ord);
+    part1OrderRef.current = p1Ord;
+    part2OrderRef.current = p2Ord;
+
+    // Hydrate survey maps
+    const initMap: Record<StudyPartNumber, Record<string, Record<string, number>>> = { 1: {}, 2: {} };
+    const currMap: Record<StudyPartNumber, Record<string, Record<string, number>>> = { 1: {}, 2: {} };
+    (bundle.surveys || []).forEach((s) => {
+      if (!initMap[s.part][s.condition]) initMap[s.part][s.condition] = {};
+      if (!currMap[s.part][s.condition]) currMap[s.part][s.condition] = {};
+      initMap[s.part][s.condition][s.question_id] = s.initial_score;
+      currMap[s.part][s.condition][s.question_id] = s.final_score;
+    });
+    setInitialScoresMap(initMap);
+    setCurrentScoresMap(currMap);
+    setSessionBundle(bundle);
+    sessionBundleRef.current = bundle;
+
+    const doneBlocks = new Set(bundle.completed_blocks || []);
+    const nextP1Idx = p1Ord.findIndex((c) => !doneBlocks.has(`PART1#${c}`));
+    if (nextP1Idx !== -1) {
+      setPart1BlockIdx(nextP1Idx);
+      part1BlockIdxRef.current = nextP1Idx;
+      onStudyVisualModeChange('PART1_BLIND_AUDIO');
+      gameWindowRef.current?.setStudyAutopilotMode(true, true);
+      setPhase('PART1_READY');
+      return;
+    }
+
+    const nextP2Idx = p2Ord.findIndex((c) => !doneBlocks.has(`PART2#${c}`));
+    if (nextP2Idx !== -1) {
+      setPart1BlockIdx(p1Ord.length - 1);
+      part1BlockIdxRef.current = p1Ord.length - 1;
+      setPart2BlockIdx(nextP2Idx);
+      part2BlockIdxRef.current = nextP2Idx;
+      onStudyVisualModeChange('PART2_MIRROR_HAZARD');
+      gameWindowRef.current?.setStudyAutopilotMode(true, true);
+      setPhase('PART2_READY');
+      return;
+    }
+
+    setPhase('STUDY_COMPLETE');
+  };
+
   // --- PART 1 EXECUTION ---
+  const runPart1Trial = useCallback(
+    (plan: ScheduledBlockPlan, idx: number) => {
+      if (idx >= plan.trials.length) {
+        finishBlockAndOpenSurvey(plan);
+        return;
+      }
+
+      clearAllTimers();
+      const trial = plan.trials[idx];
+      setCurrentTrialIdx(idx);
+      currentTrialIdxRef.current = idx;
+      setTrialSubState('INTER_TRIAL');
+      trialSubStateRef.current = 'INTER_TRIAL';
+      trialResolvedRef.current = false;
+      trialFirstRespMsRef.current = null;
+      trialWrongAttemptsRef.current = 0;
+      trialConfidenceSamplesRef.current = [];
+      trialFpsSamplesRef.current = [];
+      trialEyesOffRoadMsRef.current = 0;
+      lastSamplePerfRef.current = 0;
+
+      setStatusBanner(`Cruising at 100 km/h • Listen for cue (${idx + 1}/${plan.trials.length})`);
+      audioEngine.stopStudyTrialAlert();
+
+      scheduleTimeout(() => {
+        if (phaseRef.current !== 'PART1_RUNNING') return;
+        trialOnsetPerfRef.current = performance.now();
+        trialOnsetWallMsRef.current = Date.now();
+        lastSamplePerfRef.current = trialOnsetPerfRef.current;
+        setTrialSubState('AWAITING_RESPONSE');
+        trialSubStateRef.current = 'AWAITING_RESPONSE';
+        setStatusBanner('Identify hazard direction now (W / A / S / D)');
+
+        audioEngine.triggerStudyTrialAlert(trial.targetZone, 7.5);
+
+        scheduleTimeout(() => {
+          if (!trialResolvedRef.current && trialSubStateRef.current === 'AWAITING_RESPONSE') {
+            completePart1Trial('TIMEOUT');
+          }
+        }, STUDY_PARAMETERS.part1ResponseTimeoutMs);
+      }, trial.interTrialDelayMs);
+    },
+    [audioEngine, clearAllTimers, finishBlockAndOpenSurvey, scheduleTimeout]
+  );
+
   const startPart1Block = (blockIndex: number) => {
     const cond = part1Order[blockIndex];
     const plan = generateBlockSchedule(
@@ -470,49 +630,8 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     gameWindowRef.current?.clearStudyHazards(false);
 
     setPhase('PART1_RUNNING');
+    phaseRef.current = 'PART1_RUNNING';
     runPart1Trial(plan, 0);
-  };
-
-  const runPart1Trial = (plan: ScheduledBlockPlan, idx: number) => {
-    if (idx >= plan.trials.length) {
-      finishBlockAndOpenSurvey(plan);
-      return;
-    }
-
-    clearAllTimers();
-    const trial = plan.trials[idx];
-    setCurrentTrialIdx(idx);
-    currentTrialIdxRef.current = idx;
-    setTrialSubState('INTER_TRIAL');
-    trialSubStateRef.current = 'INTER_TRIAL';
-    trialResolvedRef.current = false;
-    trialFirstRespMsRef.current = null;
-    trialWrongAttemptsRef.current = 0;
-    trialConfidenceSamplesRef.current = [];
-    trialFpsSamplesRef.current = [];
-    trialEyesOffRoadMsRef.current = 0;
-    lastSamplePerfRef.current = 0;
-
-    setStatusBanner(`Cruising at 100 km/h • Listen for hazard cue (${idx + 1}/${plan.trials.length})...`);
-    audioEngine.stopStudyTrialAlert();
-
-    scheduleTimeout(() => {
-      if (phaseRef.current !== 'PART1_RUNNING') return;
-      trialOnsetPerfRef.current = performance.now();
-      lastSamplePerfRef.current = trialOnsetPerfRef.current;
-      setTrialSubState('AWAITING_RESPONSE');
-      trialSubStateRef.current = 'AWAITING_RESPONSE';
-      setStatusBanner('⚡ IDENTIFY DIRECTION NOW: W / A / S / D or Arrow Keys');
-
-      audioEngine.triggerStudyTrialAlert(trial.targetZone, 7.5);
-
-      // Timeout guard
-      scheduleTimeout(() => {
-        if (!trialResolvedRef.current && trialSubStateRef.current === 'AWAITING_RESPONSE') {
-          completePart1Trial('TIMEOUT');
-        }
-      }, STUDY_PARAMETERS.part1ResponseTimeoutMs);
-    }, trial.interTrialDelayMs);
   };
 
   const completePart1Trial = useCallback(
@@ -542,9 +661,9 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
       const cvAvg =
         confSamples.length > 0
           ? Math.round((confSamples.reduce((a, b) => a + b, 0) / confSamples.length) * 100) / 100
-          : isWebcamRunning
-          ? 0.95
-          : 1.0;
+          : isWebcamRunningRef.current
+            ? 0.95
+            : 1.0;
 
       const record: StudyTrialRecord = {
         participant_id: plan.participantId,
@@ -555,7 +674,7 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
         trial_index: trial.trialIndex,
         target_zone: trial.targetZone,
         threat_azimuth_deg: trial.threatAzimuthDeg,
-        onset_timestamp_ms: Math.round(Date.now() - (rtMs ?? STUDY_PARAMETERS.part1ResponseTimeoutMs)),
+        onset_timestamp_ms: trialOnsetWallMsRef.current,
         first_response_ms: rtMs,
         confirmed_rt_ms: rtMs,
         response_zone: response,
@@ -573,17 +692,25 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
 
       setSessionBundle((prev) => {
         if (!prev) return prev;
-        const fpsSamples = trialFpsSamplesRef.current;
         const avgFps =
-          fpsSamples.length > 0
-            ? Math.round(fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length)
+          sessionFpsCountRef.current > 0
+            ? Math.round(sessionFpsSumRef.current / sessionFpsCountRef.current)
             : prev.hardware_info.webcam_fps_avg;
+        const avgConf =
+          sessionConfCountRef.current > 0
+            ? Math.round((sessionConfSumRef.current / sessionConfCountRef.current) * 100) / 100
+            : prev.hardware_info.cv_confidence_avg;
         const updated: StudySessionBundle = {
           ...prev,
-          hardware_info: { ...prev.hardware_info, webcam_fps_avg: avgFps },
+          hardware_info: {
+            ...prev.hardware_info,
+            webcam_fps_avg: avgFps,
+            cv_confidence_avg: avgConf
+          },
           trials: [...prev.trials, record]
         };
         saveSessionLocally(updated);
+        sessionBundleRef.current = updated;
         return updated;
       });
 
@@ -591,20 +718,20 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
       trialSubStateRef.current = 'TRIAL_FEEDBACK';
       setStatusBanner(
         response === 'TIMEOUT'
-          ? '⏱ Response Window Elapsed — Advancing...'
-          : `✓ Recorded (${rtMs} ms)`
+          ? 'Response window elapsed — advancing'
+          : `Recorded (${rtMs} ms)`
       );
 
       scheduleTimeout(() => {
         runPart1Trial(plan, idx + 1);
       }, 420);
     },
-    [audioEngine, clearAllTimers, isWebcamRunning, scheduleTimeout]
+    [audioEngine, clearAllTimers, runPart1Trial, scheduleTimeout]
   );
 
-  // Keyboard listener for Part 1 directional response (WASD / Arrows / 1-4)
+  // Keyboard listener for Part 1 directional response
   useEffect(() => {
-    if (phase !== 'PART1_RUNNING' || trialSubState !== 'AWAITING_RESPONSE') return;
+    if (phase !== 'PART1_RUNNING' || trialSubState !== 'AWAITING_RESPONSE' || isExitConfirmOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
       const resp = getDirectionFromKey(e.key);
@@ -615,32 +742,56 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [phase, trialSubState, completePart1Trial]);
+  }, [phase, trialSubState, isExitConfirmOpen, completePart1Trial]);
 
   // --- PART 2 EXECUTION (PERSISTENT ALARM FATIGUE VS GAZE-CONTINGENT 3D) ---
-  const startPart2Block = (blockIndex: number) => {
-    const cond = part2Order[blockIndex];
-    const plan = generateBlockSchedule(
-      sessionBundleRef.current?.participant_id || participantId,
-      2,
-      cond,
-      blockIndex + 1
-    );
-    clearAllTimers();
-    setActivePlan(plan);
-    activePlanRef.current = plan;
-    setCurrentTrialIdx(0);
-    currentTrialIdxRef.current = 0;
+  const triggerPart2Onset = useCallback(
+    (plan: ScheduledBlockPlan, idx: number) => {
+      if (phaseRef.current !== 'PART2_RUNNING') return;
+      const trial = plan.trials[idx];
+      if (!trial) return;
 
-    audioEngine.setStudyAudioMode(cond);
-    onStudyVisualModeChange('PART2_MIRROR_HAZARD');
-    gameWindowRef.current?.setStudyAutopilotMode(true, false);
-    gameWindowRef.current?.clearStudyHazards(false);
-    onSimulateGaze('CENTER');
+      trialOnsetPerfRef.current = performance.now();
+      trialOnsetWallMsRef.current = Date.now();
+      lastSamplePerfRef.current = trialOnsetPerfRef.current;
+      setTrialSubState('AWAITING_RESPONSE');
+      trialSubStateRef.current = 'AWAITING_RESPONSE';
 
-    setPhase('PART2_RUNNING');
-    runPart2Trial(plan, 0);
-  };
+      gameWindowRef.current?.spawnStudyHazardCar(trial.targetZone, trial.trialIndex);
+      audioEngine.triggerStudyTrialAlert(trial.targetZone, 7.5);
+      setStatusBanner(
+        plan.condition === 'GAZE_CONTINGENT_3D'
+          ? 'Verify threat in matching mirror (300 ms dwell)'
+          : 'Alert active — check the matching mirror'
+      );
+
+      scheduleTimeout(() => {
+        if (!trialResolvedRef.current && part2ConfirmedRtRef.current === null) {
+          setShowGazeFallbackPrompt(true);
+        }
+      }, STUDY_PARAMETERS.gazeFallbackTimeoutMs);
+
+      if (plan.condition === 'TRADITIONAL_PERSISTENT') {
+        scheduleTimeout(() => {
+          finalizePart2Trial(
+            plan,
+            idx,
+            part2ConfirmedRtRef.current,
+            STUDY_PARAMETERS.traditionalAlarmMaxDurationMs,
+            part2ConfirmedRtRef.current !== null ? trial.targetZone : 'TIMEOUT'
+          );
+        }, STUDY_PARAMETERS.traditionalAlarmMaxDurationMs);
+      } else {
+        scheduleTimeout(() => {
+          if (!trialResolvedRef.current) {
+            const elapsed = Math.round(performance.now() - trialOnsetPerfRef.current);
+            finalizePart2Trial(plan, idx, null, elapsed, 'TIMEOUT');
+          }
+        }, 8000);
+      }
+    },
+    [audioEngine, gameWindowRef, scheduleTimeout]
+  );
 
   const finalizePart2Trial = useCallback(
     (
@@ -666,9 +817,9 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
       const cvAvg =
         confSamples.length > 0
           ? Math.round((confSamples.reduce((a, b) => a + b, 0) / confSamples.length) * 100) / 100
-          : isWebcamRunning
-          ? 0.95
-          : 1.0;
+          : isWebcamRunningRef.current
+            ? 0.95
+            : 1.0;
 
       const record: StudyTrialRecord = {
         participant_id: plan.participantId,
@@ -679,7 +830,7 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
         trial_index: trial.trialIndex,
         target_zone: trial.targetZone,
         threat_azimuth_deg: trial.threatAzimuthDeg,
-        onset_timestamp_ms: Math.round(Date.now() - alarmDurationMs),
+        onset_timestamp_ms: trialOnsetWallMsRef.current,
         first_response_ms: trialFirstRespMsRef.current ?? confirmedRtMs,
         confirmed_rt_ms: confirmedRtMs,
         response_zone: respondedZone,
@@ -699,107 +850,127 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
 
       setSessionBundle((prev) => {
         if (!prev) return prev;
-        const fpsSamples = trialFpsSamplesRef.current;
         const avgFps =
-          fpsSamples.length > 0
-            ? Math.round(fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length)
+          sessionFpsCountRef.current > 0
+            ? Math.round(sessionFpsSumRef.current / sessionFpsCountRef.current)
             : prev.hardware_info.webcam_fps_avg;
+        const avgConf =
+          sessionConfCountRef.current > 0
+            ? Math.round((sessionConfSumRef.current / sessionConfCountRef.current) * 100) / 100
+            : prev.hardware_info.cv_confidence_avg;
         const updated: StudySessionBundle = {
           ...prev,
-          hardware_info: { ...prev.hardware_info, webcam_fps_avg: avgFps },
+          hardware_info: {
+            ...prev.hardware_info,
+            webcam_fps_avg: avgFps,
+            cv_confidence_avg: avgConf
+          },
           trials: [...prev.trials, record]
         };
         saveSessionLocally(updated);
+        sessionBundleRef.current = updated;
         return updated;
       });
 
       setTrialSubState('TRIAL_FEEDBACK');
       trialSubStateRef.current = 'TRIAL_FEEDBACK';
       setShowGazeFallbackPrompt(false);
-      onSimulateGaze('CENTER');
+      onSimulateGaze('CENTER', true);
 
       scheduleTimeout(() => {
         runPart2Trial(plan, idx + 1);
       }, 650);
     },
-    [audioEngine, clearAllTimers, gameWindowRef, isWebcamRunning, onSimulateGaze, scheduleTimeout]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [audioEngine, clearAllTimers, gameWindowRef, onSimulateGaze, scheduleTimeout]
   );
 
-  const runPart2Trial = (plan: ScheduledBlockPlan, idx: number) => {
-    if (idx >= plan.trials.length) {
-      finishBlockAndOpenSurvey(plan);
-      return;
-    }
-
-    clearAllTimers();
-    const trial = plan.trials[idx];
-    setCurrentTrialIdx(idx);
-    currentTrialIdxRef.current = idx;
-    setTrialSubState('INTER_TRIAL');
-    trialSubStateRef.current = 'INTER_TRIAL';
-    setShowGazeFallbackPrompt(false);
-    trialResolvedRef.current = false;
-    trialFirstRespMsRef.current = null;
-    part2ConfirmedRtRef.current = null;
-    trialWrongAttemptsRef.current = 0;
-    trialConfidenceSamplesRef.current = [];
-    trialFpsSamplesRef.current = [];
-    trialEyesOffRoadMsRef.current = 0;
-    lastSamplePerfRef.current = 0;
-
-    audioEngine.stopStudyTrialAlert();
-    gameWindowRef.current?.clearStudyHazards(false);
-    onSimulateGaze('CENTER');
-    setStatusBanner(`Eyes ahead on highway • Trial ${idx + 1}/${plan.trials.length} starting...`);
-
-    scheduleTimeout(() => {
-      if (phaseRef.current !== 'PART2_RUNNING') return;
-      trialOnsetPerfRef.current = performance.now();
-      lastSamplePerfRef.current = trialOnsetPerfRef.current;
-      setTrialSubState('AWAITING_RESPONSE');
-      trialSubStateRef.current = 'AWAITING_RESPONSE';
-
-      gameWindowRef.current?.spawnStudyHazardCar(trial.targetZone, trial.trialIndex);
-      audioEngine.triggerStudyTrialAlert(trial.targetZone, 7.5);
-      setStatusBanner(
-        plan.condition === 'GAZE_CONTINGENT_3D'
-          ? '👁 Check the matching mirror (300 ms gaze dwell) to silence the 3D alert!'
-          : '🔊 Traditional Alarm Active — Check the matching mirror!'
-      );
-
-      // Show fallback guidance after 5000ms if webcam hasn't confirmed yet
-      scheduleTimeout(() => {
-        if (!trialResolvedRef.current && part2ConfirmedRtRef.current === null) {
-          setShowGazeFallbackPrompt(true);
-        }
-      }, STUDY_PARAMETERS.gazeFallbackTimeoutMs);
-
-      if (plan.condition === 'TRADITIONAL_PERSISTENT') {
-        // Persistent alarm blares for full 3500 ms regardless of gaze check
-        scheduleTimeout(() => {
-          finalizePart2Trial(
-            plan,
-            idx,
-            part2ConfirmedRtRef.current,
-            STUDY_PARAMETERS.traditionalAlarmMaxDurationMs,
-            part2ConfirmedRtRef.current !== null ? trial.targetZone : 'TIMEOUT'
-          );
-        }, STUDY_PARAMETERS.traditionalAlarmMaxDurationMs);
-      } else {
-        // Gaze-Contingent 3D max safety timeout (8000 ms)
-        scheduleTimeout(() => {
-          if (!trialResolvedRef.current) {
-            const elapsed = Math.round(performance.now() - trialOnsetPerfRef.current);
-            finalizePart2Trial(plan, idx, null, elapsed, 'TIMEOUT');
-          }
-        }, 8000);
+  const runPart2Trial = useCallback(
+    (plan: ScheduledBlockPlan, idx: number) => {
+      if (idx >= plan.trials.length) {
+        finishBlockAndOpenSurvey(plan);
+        return;
       }
-    }, trial.interTrialDelayMs);
+
+      clearAllTimers();
+      const trial = plan.trials[idx];
+      setCurrentTrialIdx(idx);
+      currentTrialIdxRef.current = idx;
+      setTrialSubState('INTER_TRIAL');
+      trialSubStateRef.current = 'INTER_TRIAL';
+      setShowGazeFallbackPrompt(false);
+      trialResolvedRef.current = false;
+      trialFirstRespMsRef.current = null;
+      part2ConfirmedRtRef.current = null;
+      trialWrongAttemptsRef.current = 0;
+      trialConfidenceSamplesRef.current = [];
+      trialFpsSamplesRef.current = [];
+      trialEyesOffRoadMsRef.current = 0;
+      lastSamplePerfRef.current = 0;
+
+      audioEngine.stopStudyTrialAlert();
+      gameWindowRef.current?.clearStudyHazards(false);
+      onSimulateGaze('CENTER', true);
+      setStatusBanner(`Eyes forward on highway • Trial ${idx + 1}/${plan.trials.length}`);
+
+      scheduleTimeout(() => {
+        if (phaseRef.current !== 'PART2_RUNNING') return;
+        // Eyes-on-road gate: wait until participant returns gaze to CENTER before onset
+        if (
+          isWebcamRunningRef.current &&
+          !useSimFallbackRef.current &&
+          currentGazeRef.current !== 'CENTER'
+        ) {
+          setTrialSubState('WAITING_FOR_CENTER');
+          trialSubStateRef.current = 'WAITING_FOR_CENTER';
+          setStatusBanner('Look forward at the highway to begin next trial');
+          return;
+        }
+        triggerPart2Onset(plan, idx);
+      }, trial.interTrialDelayMs);
+    },
+    [audioEngine, clearAllTimers, finishBlockAndOpenSurvey, gameWindowRef, onSimulateGaze, scheduleTimeout, triggerPart2Onset]
+  );
+
+  // Resume Part 2 onset as soon as gaze returns to CENTER
+  useEffect(() => {
+    if (phase === 'PART2_RUNNING' && trialSubState === 'WAITING_FOR_CENTER' && currentGaze === 'CENTER') {
+      const plan = activePlanRef.current;
+      if (plan) {
+        triggerPart2Onset(plan, currentTrialIdxRef.current);
+      }
+    }
+  }, [phase, trialSubState, currentGaze, triggerPart2Onset]);
+
+  const startPart2Block = (blockIndex: number) => {
+    const cond = part2Order[blockIndex];
+    const plan = generateBlockSchedule(
+      sessionBundleRef.current?.participant_id || participantId,
+      2,
+      cond,
+      blockIndex + 1
+    );
+    clearAllTimers();
+    setActivePlan(plan);
+    activePlanRef.current = plan;
+    setCurrentTrialIdx(0);
+    currentTrialIdxRef.current = 0;
+
+    audioEngine.setStudyAudioMode(cond);
+    onStudyVisualModeChange('PART2_MIRROR_HAZARD');
+    // Suppress visual directional spoilers in BOTH Part 1 & Part 2!
+    gameWindowRef.current?.setStudyAutopilotMode(true, true);
+    gameWindowRef.current?.clearStudyHazards(false);
+    onSimulateGaze('CENTER', true);
+
+    setPhase('PART2_RUNNING');
+    phaseRef.current = 'PART2_RUNNING';
+    runPart2Trial(plan, 0);
   };
 
   // Monitor mirror gaze during Part 2 AWAITING_RESPONSE
   useEffect(() => {
-    if (phase !== 'PART2_RUNNING' || trialSubState !== 'AWAITING_RESPONSE') return;
+    if (phase !== 'PART2_RUNNING' || trialSubState !== 'AWAITING_RESPONSE' || isExitConfirmOpen) return;
     const plan = activePlanRef.current;
     if (!plan || trialResolvedRef.current) return;
     const trial = plan.trials[currentTrialIdxRef.current];
@@ -821,28 +992,27 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
           gameWindowRef.current?.clearStudyHazards(true);
 
           if (plan.condition === 'GAZE_CONTINGENT_3D') {
-            setStatusBanner(`✓ Gaze Verified in ${elapsedMs} ms • Alert Silenced!`);
-            // Wait brief beat for C6 -> G6 confirmation chime, then finalize
+            // Clear the 8000ms safety timeout BEFORE scheduling the 420ms earcon beat (prevents timeout race!)
+            clearAllTimers();
+            setStatusBanner(`Gaze verified in ${elapsedMs} ms • Alert silenced`);
             scheduleTimeout(() => {
               finalizePart2Trial(plan, currentTrialIdxRef.current, elapsedMs, elapsedMs, trial.targetZone);
             }, 420);
           } else {
-            // Traditional Persistent keeps blaring until 3500ms timer expires!
             setStatusBanner(
-              `👁 Mirror Checked at ${elapsedMs} ms — Traditional Alarm STILL Sounding until 3.5s!`
+              `Mirror checked at ${elapsedMs} ms — persistent alarm continues until 3.5s`
             );
           }
         }
-      } else {
-        // Glanced at a non-target mirror first
+      } else if (part2ConfirmedRtRef.current === null) {
         trialWrongAttemptsRef.current += 1;
       }
     }
-  }, [phase, trialSubState, currentGaze, finalizePart2Trial, gameWindowRef, scheduleTimeout]);
+  }, [phase, trialSubState, isExitConfirmOpen, currentGaze, clearAllTimers, finalizePart2Trial, gameWindowRef, scheduleTimeout]);
 
-  // Allow keyboard 1/3/4 or mirror clicks when fallback is enabled or after gazeFallbackTimeoutMs
+  // Allow keyboard 1/3/4 or mirror clicks when simulation mode or fallback timeout triggers
   useEffect(() => {
-    if (phase !== 'PART2_RUNNING' || trialSubState !== 'AWAITING_RESPONSE') return;
+    if (phase !== 'PART2_RUNNING' || trialSubState !== 'AWAITING_RESPONSE' || isExitConfirmOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
       if (!useSimFallback && !showGazeFallbackPrompt && isWebcamRunning) return;
@@ -854,28 +1024,14 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [phase, trialSubState, useSimFallback, showGazeFallbackPrompt, isWebcamRunning, onSimulateGaze]);
+  }, [phase, trialSubState, isExitConfirmOpen, useSimFallback, showGazeFallbackPrompt, isWebcamRunning, onSimulateGaze]);
 
-  // --- BLOCK COMPLETION & PROGRESSIVE SURVEY HANDLER ---
-  const finishBlockAndOpenSurvey = (plan: ScheduledBlockPlan) => {
-    clearAllTimers();
-    audioEngine.stopStudyTrialAlert();
-    gameWindowRef.current?.clearStudyHazards(false);
-
-    const completedForPart =
-      plan.part === 1 ? part1Order.slice(0, part1BlockIdx + 1) : part2Order.slice(0, part2BlockIdx + 1);
-
-    setSurveyPart(plan.part);
-    setSurveyCompletedConds(completedForPart);
-    setSurveyModalOpen(true);
-  };
-
-  const handleSurveySubmit = async (updatedScoresByCond: Record<string, Record<string, number>>) => {
+  // --- SURVEY SUBMIT WITH NON-BLOCKING BACKGROUND AWS SYNC ---
+  const handleSurveySubmit = (updatedScoresByCond: Record<string, Record<string, number>>) => {
     const part = surveyPart;
     const applicableQs = SURVEY_QUESTIONS.filter((q) => q.applicableParts.includes(part));
     const latestCond = surveyCompletedConds[surveyCompletedConds.length - 1];
 
-    // Record initial scores for the newly evaluated condition if not yet stored
     const nextInitialForPart = { ...(initialScoresMap[part] || {}) };
     if (latestCond && !nextInitialForPart[latestCond]) {
       nextInitialForPart[latestCond] = { ...(updatedScoresByCond[latestCond] || {}) };
@@ -885,9 +1041,8 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     setInitialScoresMap((prev) => ({ ...prev, [part]: nextInitialForPart }));
     setCurrentScoresMap((prev) => ({ ...prev, [part]: nextCurrentForPart }));
 
-    // Build updated StudySurveyRecord list for this part (stores latest recalibrated values + original initial_score)
     const nowIso = new Date().toISOString();
-    const orderList = part === 1 ? part1Order : part2Order;
+    const orderList = part === 1 ? part1OrderRef.current : part2OrderRef.current;
     const updatedPartSurveys: StudySurveyRecord[] = [];
     surveyCompletedConds.forEach((cond) => {
       const condOrder = orderList.indexOf(cond as never) + 1;
@@ -908,8 +1063,8 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
       });
     });
 
-    const isPart1Last = part === 1 && part1BlockIdx >= part1Order.length - 1;
-    const isPart2Last = part === 2 && part2BlockIdx >= part2Order.length - 1;
+    const isPart1Last = part === 1 && part1BlockIdxRef.current >= orderList.length - 1;
+    const isPart2Last = part === 2 && part2BlockIdxRef.current >= orderList.length - 1;
 
     const prevBundle = sessionBundleRef.current;
     if (prevBundle) {
@@ -925,47 +1080,133 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
         part2_completed: prevBundle.part2_completed || isPart2Last,
         completed_blocks: completedBlocks,
         surveys: [...otherPartSurveys, ...updatedPartSurveys],
-        updated_at: nowIso
+        updated_at: nowIso,
+        sync_status: 'PENDING'
       };
 
       setSessionBundle(nextBundle);
       sessionBundleRef.current = nextBundle;
       saveSessionLocally(nextBundle);
 
+      // Fire cloud sync in background so UI never freezes waiting for retries
       setIsSyncing(true);
-      const res = await syncBlockToCloud(nextBundle, part, latestCond, studyPasscode);
-      setIsSyncing(false);
-      if (res.ok) {
-        setSyncError(null);
-        setSessionBundle((b) => (b ? { ...b, sync_status: 'SYNCED', s3_key: res.s3Key } : b));
-      } else {
-        setSyncError(res.error || 'Cloud sync failed after retries.');
-        setSessionBundle((b) =>
-          b ? { ...b, sync_status: 'LOCAL_FALLBACK', last_sync_error: res.error } : b
-        );
-      }
+      syncBlockToCloud(nextBundle, part, latestCond, studyPasscode).then((res) => {
+        setIsSyncing(false);
+        if (res.ok) {
+          setSyncError(null);
+          setSessionBundle((b) => (b ? { ...b, sync_status: 'SYNCED', s3_key: res.s3Key } : b));
+        } else {
+          setSyncError(res.error || 'Cloud sync failed.');
+          setSessionBundle((b) =>
+            b ? { ...b, sync_status: 'LOCAL_FALLBACK', last_sync_error: res.error } : b
+          );
+        }
+      });
     }
 
     setSurveyModalOpen(false);
 
     if (part === 1) {
-      if (part1BlockIdx + 1 < part1Order.length) {
-        setPart1BlockIdx(part1BlockIdx + 1);
+      if (part1BlockIdxRef.current + 1 < part1OrderRef.current.length) {
+        const nextIdx = part1BlockIdxRef.current + 1;
+        setPart1BlockIdx(nextIdx);
+        part1BlockIdxRef.current = nextIdx;
         setPhase('PART1_READY');
       } else {
         setPhase('PART1_TRANSITION');
       }
     } else {
-      if (part2BlockIdx + 1 < part2Order.length) {
-        setPart2BlockIdx(part2BlockIdx + 1);
+      if (part2BlockIdxRef.current + 1 < part2OrderRef.current.length) {
+        const nextIdx = part2BlockIdxRef.current + 1;
+        setPart2BlockIdx(nextIdx);
+        part2BlockIdxRef.current = nextIdx;
         setPhase('PART2_READY');
       } else {
         audioEngine.setStudyAudioMode(null);
+        audioEngine.setAmbientEnabled(false);
         onStudyVisualModeChange('OFF');
         gameWindowRef.current?.setStudyAutopilotMode(false, false);
         setPhase('STUDY_COMPLETE');
       }
     }
+  };
+
+  // --- PAUSE / EXIT CONFIRMATION HANDLERS ---
+  const handleRequestPauseExit = () => {
+    clearAllTimers();
+    audioEngine.stopStudyTrialAlert();
+    audioEngine.setAmbientEnabled(false);
+    gameWindowRef.current?.clearStudyHazards(false);
+    setIsExitConfirmOpen(true);
+  };
+
+  const handleRestartCurrentBlock = () => {
+    setIsExitConfirmOpen(false);
+    const plan = activePlanRef.current;
+    if (!plan) return;
+    // Discard incomplete trials from current interrupted block so dataset stays balanced
+    setSessionBundle((prev) => {
+      if (!prev) return prev;
+      const cleaned: StudySessionBundle = {
+        ...prev,
+        trials: prev.trials.filter((t) => !(t.part === plan.part && t.condition === plan.condition))
+      };
+      saveSessionLocally(cleaned);
+      sessionBundleRef.current = cleaned;
+      return cleaned;
+    });
+    if (plan.part === 1) {
+      startPart1Block(part1BlockIdxRef.current);
+    } else {
+      startPart2Block(part2BlockIdxRef.current);
+    }
+  };
+
+  const handleSaveCompletedAndExit = () => {
+    setIsExitConfirmOpen(false);
+    const plan = activePlanRef.current;
+    if (plan) {
+      setSessionBundle((prev) => {
+        if (!prev) return prev;
+        const cleaned: StudySessionBundle = {
+          ...prev,
+          trials: prev.trials.filter((t) => !(t.part === plan.part && t.condition === plan.condition))
+        };
+        saveSessionLocally(cleaned);
+        sessionBundleRef.current = cleaned;
+        return cleaned;
+      });
+    }
+    onClose();
+  };
+
+  // --- START NEXT PARTICIPANT RESET ---
+  const handleStartNextParticipant = () => {
+    clearAllTimers();
+    audioEngine.stopStudyTrialAlert();
+    audioEngine.setAmbientEnabled(false);
+    audioEngine.setStudyAudioMode(null);
+    onStudyVisualModeChange('OFF');
+    gameWindowRef.current?.setStudyAutopilotMode(false, false);
+
+    const nextPid = suggestNextParticipantId();
+    setParticipantId(nextPid);
+    setSessionBundle(null);
+    sessionBundleRef.current = null;
+    setActivePlan(null);
+    activePlanRef.current = null;
+    setPart1BlockIdx(0);
+    setPart2BlockIdx(0);
+    setInitialScoresMap({ 1: {}, 2: {} });
+    setCurrentScoresMap({ 1: {}, 2: {} });
+    setSyncError(null);
+    setPracticeKeyDone(false);
+    setPracticeGazeDone(false);
+    setPracticeSkipped(false);
+    setLeftEarTested(false);
+    setRightEarTested(false);
+    setStereoOverride(false);
+    setPhase('STEP0_GATE');
   };
 
   const handleRetrySync = async () => {
@@ -992,8 +1233,7 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
   };
 
   /**
-   * Researcher E2E Verification Runner (enabled only when Participant ID === 'P_00'):
-   * Exercises deterministic Part 1 + Progressive Surveys + Part 2 + AWS S3/DynamoDB ingest.
+   * Researcher E2E Verification Runner (P_00 only)
    */
   const handleRunAutomatedP00Test = async () => {
     const pid = 'P_00';
@@ -1005,7 +1245,6 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     const surveys: StudySurveyRecord[] = [];
     const completedBlocks: string[] = [];
 
-    // Part 1 deterministic simulated trials (Mono -> Stereo -> 3D Spatial)
     p1Ord.forEach((cond, cIdx) => {
       const plan = generateBlockSchedule(pid, 1, cond, cIdx + 1);
       completedBlocks.push(`PART1#${cond}`);
@@ -1040,9 +1279,9 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
           wrong_attempts_count: isCorrect ? 0 : 1,
           alarm_duration_ms: rt,
           wasted_alarm_ms: 0,
-          beep_pulse_count: Math.max(1, Math.round(rt / 380)),
+          beep_pulse_count: Math.max(1, Math.round(rt / 360)),
           eyes_off_road_ms: 0,
-          cv_confidence_avg: 0.96,
+          cv_confidence_avg: 0.95,
           timestamp_iso: nowIso
         });
       });
@@ -1054,12 +1293,10 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
               ? 2.0
               : 9.0
             : cond === 'STEREO_BASELINE'
-            ? q.lowerIsBetter
               ? 5.5
-              : 5.5
-            : q.lowerIsBetter
-            ? 7.5
-            : 2.5;
+              : q.lowerIsBetter
+                ? 7.5
+                : 2.5;
         const fin = cond === 'MONO_BASELINE' && !q.lowerIsBetter ? Math.max(0, init - 0.5) : init;
         surveys.push({
           participant_id: pid,
@@ -1075,7 +1312,6 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
       });
     });
 
-    // Part 2 deterministic simulated trials (Traditional Persistent vs Gaze-Contingent 3D)
     p2Ord.forEach((cond, cIdx) => {
       const plan = generateBlockSchedule(pid, 2, cond, cIdx + 1);
       completedBlocks.push(`PART2#${cond}`);
@@ -1104,7 +1340,7 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
           wasted_alarm_ms: wasted,
           beep_pulse_count: cond === 'TRADITIONAL_PERSISTENT' ? 10 : 2,
           eyes_off_road_ms: 480,
-          cv_confidence_avg: 0.96,
+          cv_confidence_avg: 0.95,
           timestamp_iso: nowIso
         });
       });
@@ -1133,7 +1369,7 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
         audio_output_device: audioOutputLabel,
         webcam_label: isWebcamRunning ? webcamLabel : 'E2E Calibration Self-Test',
         webcam_fps_avg: visionDiag?.fps || 30,
-        cv_confidence_avg: 0.96,
+        cv_confidence_avg: 0.95,
         input_mode: isWebcamRunning ? 'WEBCAM_MEDIAPIPE' : 'SIMULATION_FALLBACK',
         user_agent: navigator.userAgent
       },
@@ -1151,6 +1387,7 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
     sessionBundleRef.current = bundle;
     saveSessionLocally(bundle);
     setIsSyncing(true);
+    setPhase('STUDY_COMPLETE');
     const res = await syncBlockToCloud(bundle, 2, p2Ord[p2Ord.length - 1], studyPasscode);
     setIsSyncing(false);
     if (res.ok) {
@@ -1160,981 +1397,432 @@ export const StudyOrchestrator: React.FC<StudyOrchestratorProps> = ({
       setSyncError(res.error || 'Cloud sync failed.');
       setSessionBundle((b) => (b ? { ...b, sync_status: 'LOCAL_FALLBACK', last_sync_error: res.error } : b));
     }
-    setPhase('STUDY_COMPLETE');
   };
+
+  // Build blinded condition label map for surveys so participants remain naive to condition hypotheses
+  const blindedLabelsMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    part1Order.forEach((cond, i) => {
+      map[cond] = getBlindedConditionLabel(1, i + 1);
+    });
+    part2Order.forEach((cond, i) => {
+      map[cond] = getBlindedConditionLabel(2, i + 1);
+    });
+    return map;
+  }, [part1Order, part2Order]);
 
   if (!isOpen) return null;
 
   const pidValid = isValidParticipantId(participantId);
+  const readinessOk = (practiceKeyDone && practiceGazeDone) || practiceSkipped;
+  const trackingReady = trackingMode === 'SIMULATION' || isWebcamRunning;
+  const canBeginStudy = pidValid && stereoConfirmed && trackingReady && readinessOk;
   const fpsOk = (visionDiag?.fps ?? 0) >= STUDY_PARAMETERS.minRequiredWebcamFps;
-  const canBeginStudy =
-    pidValid &&
-    stereoConfirmed &&
-    (isWebcamRunning || useSimFallback) &&
-    (practiceComplete || useSimFallback);
-
-  const isRunningOnHighway = phase === 'PART1_RUNNING' || phase === 'PART2_RUNNING';
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 10000,
-        pointerEvents: isRunningOnHighway ? 'none' : 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        background: isRunningOnHighway ? 'transparent' : 'rgba(5, 8, 16, 0.88)',
-        backdropFilter: isRunningOnHighway ? 'none' : 'blur(14px)'
-      }}
+      className={`fixed inset-0 z-[10000] flex flex-col p-4 sm:p-6 ${
+        isRunningOnHighway ? 'pointer-events-none bg-transparent' : 'bg-[#09090b]/90 backdrop-blur-md'
+      }`}
     >
-      {/* Persistent Webcam Video Node — kept mounted across Step 0 -> Part 1 -> Part 2 so MediaPipe stream never interrupts */}
-      <div
-        style={
-          phase === 'STEP0_GATE'
-            ? {
-                position: 'fixed',
-                right: 28,
-                bottom: 24,
-                width: 196,
-                zIndex: 10010,
-                display: isWebcamRunning ? 'block' : 'none',
-                borderRadius: 10,
-                overflow: 'hidden',
-                border: `1.5px solid ${faceDetectedNow ? '#10b981' : '#f59e0b'}`,
-                background: '#050914',
-                boxShadow: '0 10px 30px rgba(0,0,0,0.7)',
-                pointerEvents: 'none'
-              }
-            : isRunningOnHighway && isWebcamRunning
-            ? {
-                position: 'fixed',
-                right: 16,
-                bottom: 84,
-                width: 160,
-                zIndex: 10010,
-                borderRadius: 10,
-                overflow: 'hidden',
-                border: `1.5px solid ${faceDetectedNow ? '#10b981' : '#f59e0b'}`,
-                background: '#050914',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.75)',
-                pointerEvents: 'none'
-              }
-            : {
-                position: 'fixed',
-                width: 1,
-                height: 1,
-                opacity: 0,
-                pointerEvents: 'none'
-              }
-        }
-      >
-        <div style={{ position: 'relative', width: '100%', aspectRatio: '4 / 3' }}>
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              transform: 'scaleX(-1)'
-            }}
-          />
-          <canvas
-            ref={canvasRef}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
-              pointerEvents: 'none'
-            }}
-          />
-          {visionDiag && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 4,
-                left: 4,
-                background: 'rgba(0,0,0,0.7)',
-                padding: '2px 5px',
-                borderRadius: 4,
-                fontSize: 9,
-                fontFamily: 'var(--font-mono)',
-                color: fpsOk ? '#34d399' : '#fbbf24'
-              }}
-            >
-              {visionDiag.fps} FPS • {currentGaze}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ===================================================================== */}
-      {/* STEP 0: HARDWARE & CALIBRATION GATE                                   */}
-      {/* ===================================================================== */}
+      {/* STEP 0: HARDWARE & CALIBRATION GATE */}
       {phase === 'STEP0_GATE' && (
-        <div
-          style={{
-            margin: 'auto',
-            width: '96%',
-            maxWidth: 940,
-            maxHeight: '92vh',
-            overflowY: 'auto',
-            background: '#0b1120',
-            border: '1px solid rgba(0, 240, 255, 0.35)',
-            borderRadius: 16,
-            boxShadow: '0 24px 64px rgba(0,0,0,0.85), 0 0 35px rgba(0, 240, 255, 0.14)',
-            padding: 24,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 18
+        <StudyCalibrationStep
+          participantId={participantId}
+          onParticipantIdChange={(raw) => setParticipantId(raw.toUpperCase())}
+          onNormalizeParticipantId={() => setParticipantId((p) => normalizeParticipantId(p))}
+          existingSession={existingLocalSession}
+          onResumeExistingSession={handleResumeExistingSession}
+          onSuggestNextId={() => setParticipantId(suggestNextParticipantId())}
+          studyPasscode={studyPasscode}
+          onStudyPasscodeChange={setStudyPasscode}
+          part1Order={part1Order}
+          part2Order={part2Order}
+          audioOutputLabel={audioOutputLabel}
+          volume={volume}
+          onVolumeChange={onVolumeChange}
+          leftEarTested={leftEarTested}
+          rightEarTested={rightEarTested}
+          stereoVerified={stereoConfirmed}
+          onTestEar={(ch) => {
+            audioEngine.playStereoChannelTest(ch);
+            if (ch === 'LEFT') setLeftEarTested(true);
+            else setRightEarTested(true);
           }}
-        >
-          {/* Header */}
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              borderBottom: '1px solid rgba(255,255,255,0.08)',
-              paddingBottom: 14
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div
-                style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 10,
-                  background: 'rgba(0, 240, 255, 0.14)',
-                  border: '1px solid rgba(0, 240, 255, 0.4)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}
-              >
-                <Activity size={20} color="#00f0ff" />
-              </div>
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#00f0ff', letterSpacing: '0.09em' }}>
-                  KNU HCI LAB • EMPIRICAL EVALUATION PROTOCOL
-                </div>
-                <h1 style={{ fontSize: 19, fontWeight: 800, color: '#fff', marginTop: 2 }}>
-                  Step 0 — Hardware Calibration & Counterbalanced Assignment
-                </h1>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              {onOpenLegacySandboxStudy && (
-                <button
-                  className="btn"
-                  style={{ fontSize: 11, padding: '6px 10px' }}
-                  onClick={() => {
-                    onClose();
-                    onOpenLegacySandboxStudy();
-                  }}
-                >
-                  Quick 10-Trial Demo
-                </button>
-              )}
-              <button className="btn" onClick={onClose} style={{ padding: 6 }} title="Return to Cockpit">
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          {/* Participant ID + Passcode + Latin Square Preview */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.6fr', gap: 12 }}>
-            <div className="telemetry-item">
-              <div className="telemetry-label">Participant ID (P_01..P_999)</div>
-              <input
-                type="text"
-                value={participantId}
-                onChange={(e) => setParticipantId(e.target.value.toUpperCase())}
-                placeholder="P_01"
-                style={{
-                  width: '100%',
-                  marginTop: 6,
-                  padding: '7px 10px',
-                  borderRadius: 6,
-                  background: '#060a14',
-                  border: `1px solid ${pidValid ? 'rgba(0,240,255,0.4)' : '#ef4444'}`,
-                  color: '#fff',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 14,
-                  fontWeight: 700,
-                  outline: 'none'
-                }}
-              />
-              {!pidValid && (
-                <div style={{ fontSize: 10, color: '#f87171', marginTop: 4 }}>
-                  Must match P_00 to P_999
-                </div>
-              )}
-            </div>
-
-            <div className="telemetry-item">
-              <div className="telemetry-label">Study Access Token</div>
-              <input
-                type="password"
-                value={studyPasscode}
-                onChange={(e) => setStudyPasscode(e.target.value)}
-                style={{
-                  width: '100%',
-                  marginTop: 6,
-                  padding: '7px 10px',
-                  borderRadius: 6,
-                  background: '#060a14',
-                  border: '1px solid rgba(255,255,255,0.16)',
-                  color: '#fff',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 14,
-                  outline: 'none'
-                }}
-              />
-            </div>
-
-            <div className="telemetry-item" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div className="telemetry-label">Assigned Counterbalanced Sequence</div>
-              <div style={{ fontSize: 11, color: '#cbd5e1', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                <strong style={{ color: '#00f0ff' }}>Part 1 (3×3):</strong>
-                {part1Order.map((c, idx) => (
-                  <span
-                    key={c}
-                    style={{
-                      padding: '1px 6px',
-                      borderRadius: 4,
-                      background: CONDITION_META[c].badgeBg,
-                      color: CONDITION_META[c].accentColor,
-                      fontWeight: 700,
-                      fontSize: 10
-                    }}
-                  >
-                    {idx + 1}. {CONDITION_META[c].shortLabel}
-                  </span>
-                ))}
-              </div>
-              <div style={{ fontSize: 11, color: '#cbd5e1', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                <strong style={{ color: '#10b981' }}>Part 2 (2×2):</strong>
-                {part2Order.map((c, idx) => (
-                  <span
-                    key={c}
-                    style={{
-                      padding: '1px 6px',
-                      borderRadius: 4,
-                      background: CONDITION_META[c].badgeBg,
-                      color: CONDITION_META[c].accentColor,
-                      fontWeight: 700,
-                      fontSize: 10
-                    }}
-                  >
-                    {idx + 1}. {CONDITION_META[c].shortLabel}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Step 0 Gate Cards: 1. Stereo Headphone Check | 2. Webcam Gaze Calibration */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            {/* Card A: Stereo Audio Check */}
-            <div
-              style={{
-                background: 'rgba(15, 23, 42, 0.72)',
-                border: `1px solid ${stereoConfirmed ? 'rgba(16, 185, 129, 0.5)' : 'rgba(255,255,255,0.1)'}`,
-                borderRadius: 12,
-                padding: 16,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', display: 'flex', gap: 8 }}>
-                  <Headphones size={16} color="#00f0ff" /> 1. Stereo Headphone Check
-                </span>
-                {stereoConfirmed && <CheckCircle2 size={16} color="#10b981" />}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                Detected Output: <code style={{ color: '#38bdf8' }}>{audioOutputLabel}</code>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  className={`btn ${leftEarTested ? 'btn-primary' : ''}`}
-                  style={{ flex: 1, fontSize: 12 }}
-                  onClick={() => {
-                    audioEngine.playStereoChannelTest('LEFT');
-                    setLeftEarTested(true);
-                  }}
-                >
-                  <Volume2 size={14} /> Test Left Ear
-                </button>
-                <button
-                  className={`btn ${rightEarTested ? 'btn-primary' : ''}`}
-                  style={{ flex: 1, fontSize: 12 }}
-                  onClick={() => {
-                    audioEngine.playStereoChannelTest('RIGHT');
-                    setRightEarTested(true);
-                  }}
-                >
-                  <Volume2 size={14} /> Test Right Ear
-                </button>
-              </div>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 11.5,
-                  color: '#e2e8f0',
-                  cursor: 'pointer',
-                  marginTop: 2
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={stereoConfirmed}
-                  onChange={(e) => setStereoConfirmed(e.target.checked)}
-                />
-                I confirm stereo audio plays clearly in Left & Right channels
-              </label>
-            </div>
-
-            {/* Card B: Webcam Gaze Tracking Gate */}
-            <div
-              style={{
-                background: 'rgba(15, 23, 42, 0.72)',
-                border: `1px solid ${
-                  isWebcamRunning && faceDetectedNow
-                    ? 'rgba(16, 185, 129, 0.5)'
-                    : 'rgba(255,255,255,0.1)'
-                }`,
-                borderRadius: 12,
-                padding: 16,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', display: 'flex', gap: 8 }}>
-                  <Eye size={16} color="#10b981" /> 2. Webcam Gaze Calibration Gate
-                </span>
-                {isWebcamRunning && (
-                  <span
-                    style={{
-                      fontSize: 10,
-                      fontWeight: 800,
-                      padding: '2px 7px',
-                      borderRadius: 10,
-                      background: faceDetectedNow ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)',
-                      color: faceDetectedNow ? '#34d399' : '#fbbf24'
-                    }}
-                  >
-                    {faceDetectedNow ? `FACE LOCKED (${visionDiag?.fps || 0} FPS)` : 'ALIGN FACE'}
-                  </span>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button
-                  className={`btn ${isWebcamRunning ? 'btn-primary' : 'btn-accent'}`}
-                  style={{ flex: 1, fontSize: 12 }}
-                  onClick={handleStartWebcam}
-                >
-                  <Camera size={14} />
-                  {isWebcamRunning ? 'Webcam Active (MediaPipe)' : 'Enable Webcam Gaze Tracker'}
-                </button>
-              </div>
-
-              {webcamError && (
-                <div style={{ fontSize: 11, color: '#fca5a5', lineHeight: 1.4 }}>{webcamError}</div>
-              )}
-
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 11,
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer'
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={useSimFallback}
-                  onChange={(e) => setUseSimFallback(e.target.checked)}
-                />
-                Enable Keyboard/Click Gaze Simulation Fallback (if no webcam available)
-              </label>
-            </div>
-          </div>
-
-          {/* 10s Interactive Practice Round */}
-          <div
-            style={{
-              background: 'rgba(0, 240, 255, 0.06)',
-              border: '1px solid rgba(0, 240, 255, 0.28)',
-              borderRadius: 12,
-              padding: 16,
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              gap: 16
-            }}
-          >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>
-                3. 10-Second Interactive Practice Round (Unlogged)
-              </div>
-              <div style={{ fontSize: 11.5, color: '#cbd5e1' }}>
-                Test pressing <strong>W / A / S / D</strong> (or Arrow keys) for directional responses and holding a <strong>300 ms mirror glance</strong> to confirm the <code>C6 → G6</code> earcon.
-              </div>
-              <div style={{ display: 'flex', gap: 12, marginTop: 4, fontSize: 11 }}>
-                <span style={{ color: practiceKeyDone ? '#34d399' : '#94a3b8', fontWeight: 700 }}>
-                  {practiceKeyDone ? '✓ WASD Key Verified' : '○ Press any W/A/S/D key'}
-                </span>
-                <span style={{ color: practiceGazeDone ? '#34d399' : '#94a3b8', fontWeight: 700 }}>
-                  {practiceGazeDone ? '✓ 300ms Mirror Dwell Verified' : '○ Glance at Left/Right/Rear mirror'}
-                </span>
-              </div>
-            </div>
-
-            <button
-              className={`btn ${practiceComplete ? 'btn-primary' : 'btn-accent'}`}
-              disabled={isPracticeActive}
-              onClick={handleStartPractice}
-              style={{ minWidth: 195, padding: '10px 16px' }}
-            >
-              {isPracticeActive
-                ? `Practice Running (${practiceSecondsLeft}s)...`
-                : practiceComplete
-                ? '✓ Practice Completed (Redo)'
-                : '▶ Start 10s Practice'}
-            </button>
-          </div>
-
-          {/* Launch Button */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              All trials & survey ratings auto-save locally after every block and sync incrementally to AWS.
-            </span>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              {participantId.trim().toUpperCase() === 'P_00' && (
-                <button
-                  className="btn btn-accent"
-                  disabled={isSyncing}
-                  onClick={handleRunAutomatedP00Test}
-                  style={{ padding: '10px 16px', fontSize: 12.5 }}
-                >
-                  ⚡ {isSyncing ? 'Syncing P_00...' : 'Run Automated E2E Verification (P_00)'}
-                </button>
-              )}
-              <button
-                className="btn btn-primary"
-                disabled={!canBeginStudy}
-                onClick={handleBeginEmpiricalStudy}
-                style={{
-                  padding: '12px 24px',
-                  fontSize: 14,
-                  opacity: canBeginStudy ? 1 : 0.45,
-                  cursor: canBeginStudy ? 'pointer' : 'not-allowed'
-                }}
-              >
-                <Play size={16} /> Begin Part 1: Spatial Localization Study
-              </button>
-            </div>
-          </div>
-        </div>
+          onToggleStereoOverride={setStereoOverride}
+          trackingMode={trackingMode}
+          onSelectTrackingMode={(mode) => {
+            setTrackingMode(mode);
+            if (mode === 'SIMULATION') {
+              setWebcamError(null);
+            }
+          }}
+          isWebcamRunning={isWebcamRunning}
+          webcamLoading={webcamLoading}
+          webcamError={webcamError}
+          faceDetectedNow={faceDetectedNow}
+          visionDiag={visionDiag}
+          currentGaze={currentGaze}
+          isCalibrated={isCalibrated}
+          onStartWebcam={handleStartWebcam}
+          onCalibrateCenter={handleCalibrateCenter}
+          videoRef={step0VideoRef}
+          canvasRef={step0CanvasRef}
+          practiceKeyDone={practiceKeyDone}
+          practiceGazeDone={practiceGazeDone}
+          practiceSkipped={practiceSkipped}
+          onPlaySampleCue={() => {
+            audioEngine.ensureReadyWithoutAmbient().then(() => {
+              audioEngine.setStudyAudioMode('SPATIAL_3D');
+              audioEngine.testDirection('LEFT_MIRROR');
+            });
+          }}
+          onTriggerPracticeMirror={() => {
+            onSimulateGaze('LEFT_MIRROR', true);
+          }}
+          onSkipPractice={() => setPracticeSkipped(true)}
+          onRunAutomatedP00Test={handleRunAutomatedP00Test}
+          isSyncing={isSyncing}
+          canBeginStudy={canBeginStudy}
+          onBeginStudy={handleBeginEmpiricalStudy}
+          onClose={onClose}
+        />
       )}
 
-      {/* ===================================================================== */}
-      {/* PART 1 & PART 2 BLOCK INTRO CARDS                                     */}
-      {/* ===================================================================== */}
+      {/* PART 1 & PART 2 BLINDED BLOCK INTRO BRIEFING */}
       {(phase === 'PART1_READY' || phase === 'PART2_READY') && (
-        <div
-          style={{
-            margin: 'auto',
-            width: '94%',
-            maxWidth: 640,
-            background: '#0b1120',
-            border: '1px solid rgba(0, 240, 255, 0.45)',
-            borderRadius: 16,
-            padding: 26,
-            boxShadow: '0 24px 64px rgba(0,0,0,0.85)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 16
-          }}
+        <motion.div
+          initial={{ opacity: 0, y: 8, scale: 0.99 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ type: 'spring', stiffness: 420, damping: 36, mass: 0.8 }}
+          className="mx-auto my-auto flex w-full max-w-xl flex-col gap-5 rounded-[14px] border border-border bg-card p-6 sm:p-8"
         >
           {(() => {
             const isPart1 = phase === 'PART1_READY';
             const blockNum = isPart1 ? part1BlockIdx + 1 : part2BlockIdx + 1;
             const totalBlocks = isPart1 ? part1Order.length : part2Order.length;
-            const cond = isPart1 ? part1Order[part1BlockIdx] : part2Order[part2BlockIdx];
-            const meta = CONDITION_META[cond];
+            const blindedLabel = getBlindedConditionLabel(isPart1 ? 1 : 2, blockNum);
 
             return (
               <>
-                <div style={{ fontSize: 11, fontWeight: 800, color: meta.accentColor, letterSpacing: '0.09em' }}>
-                  {isPart1 ? 'PART 1: SPATIAL LOCALIZATION BENCHMARK' : 'PART 2: ALARM FATIGUE VS. GAZE CANCELLATION'} • BLOCK {blockNum} OF {totalBlocks}
+                <div>
+                  <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-[#38bdf8]">
+                    {isPart1 ? 'Part 1 • Spatial Localization' : 'Part 2 • Mirror Verification'} • Block{' '}
+                    {blockNum} of {totalBlocks}
+                  </div>
+                  <h2 className="mt-1.5 font-heading text-2xl font-semibold tracking-[-0.03em] text-foreground">
+                    {blindedLabel}
+                  </h2>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {isPart1
+                      ? 'The vehicle cruises autonomously at 100 km/h. Listen to each audio warning and indicate which direction the alert came from as quickly and accurately as possible.'
+                      : 'Keep your eyes ahead on the highway. When an audio alert sounds, glance at the matching mirror and hold your gaze for 300 ms to inspect the vehicle.'}
+                  </p>
                 </div>
-                <h2 style={{ fontSize: 21, fontWeight: 800, color: '#fff' }}>{meta.label}</h2>
-                <p style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.55 }}>{meta.description}</p>
 
-                <div
-                  style={{
-                    background: 'rgba(15, 23, 42, 0.8)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    borderRadius: 10,
-                    padding: 14,
-                    fontSize: 12,
-                    color: '#e2e8f0',
-                    lineHeight: 1.65
-                  }}
-                >
+                <div className="space-y-2 rounded-[10px] border border-border bg-[#09090b]/60 p-4 text-[13px] leading-relaxed text-muted-foreground">
                   {isPart1 ? (
                     <>
-                      <strong>Instructions ({STUDY_PARAMETERS.part1TrialsPerCondition} Trials):</strong>
-                      <br />• The vehicle drives automatically on autopilot at <strong>100 km/h</strong> along the curved highway.
-                      <br />• Listen carefully and press the hazard direction immediately:
-                      <br />
-                      <code>W / ↑</code> Front &nbsp;•&nbsp; <code>S / ↓</code> Rear &nbsp;•&nbsp; <code>A / ←</code> Left &nbsp;•&nbsp; <code>D / →</code> Right
+                      <div className="font-medium text-foreground">
+                        Controls ({STUDY_PARAMETERS.part1TrialsPerCondition} trials)
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1 font-mono text-xs text-foreground">
+                        <span className="rounded border border-border bg-secondary px-2 py-1">W / ↑ Front</span>
+                        <span className="rounded border border-border bg-secondary px-2 py-1">A / ← Left</span>
+                        <span className="rounded border border-border bg-secondary px-2 py-1">S / ↓ Rear</span>
+                        <span className="rounded border border-border bg-secondary px-2 py-1">D / → Right</span>
+                      </div>
                     </>
                   ) : (
                     <>
-                      <strong>Instructions ({STUDY_PARAMETERS.part2TrialsPerCondition} Trials):</strong>
-                      <br />• Keep eyes focused forward on the highway.
-                      <br />• When an alert sounds, glance at the matching mirror (<strong>Left</strong>, <strong>Right</strong>, or <strong>Rear-View</strong>) and hold for <strong>300 ms</strong> to verify the vehicle.
-                      {(useSimFallback || !isWebcamRunning) && (
-                        <>
-                          <br />• <em>Simulation Fallback Active:</em> Press keys <code>1</code> (Left), <code>3</code> (Right), <code>4</code> (Rear) or click a mirror.
-                        </>
-                      )}
+                      <div className="font-medium text-foreground">
+                        Instructions ({STUDY_PARAMETERS.part2TrialsPerCondition} trials)
+                      </div>
+                      <ul className="list-disc space-y-1 pl-4">
+                        <li>Maintain forward focus between trials.</li>
+                        <li>Look at Left Wing, Right Wing, or Rear-View mirror on alert onset.</li>
+                        {(useSimFallback || !isWebcamRunning) && (
+                          <li>
+                            Fallback keys:{' '}
+                            <span className="font-mono text-foreground">1</span> Left •{' '}
+                            <span className="font-mono text-foreground">4</span> Rear •{' '}
+                            <span className="font-mono text-foreground">3</span> Right (or click mirror).
+                          </li>
+                        )}
+                      </ul>
                     </>
                   )}
                 </div>
 
-                <button
-                  className="btn btn-primary"
-                  style={{ padding: '12px 20px', fontSize: 14 }}
-                  onClick={() => (isPart1 ? startPart1Block(part1BlockIdx) : startPart2Block(part2BlockIdx))}
-                >
-                  <Play size={16} /> Start Block {blockNum} ({meta.shortLabel})
-                </button>
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <Button type="button" variant="outline" onClick={onClose} className="h-9 text-sm">
+                    Exit Study
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="default"
+                    onClick={() => (isPart1 ? startPart1Block(part1BlockIdx) : startPart2Block(part2BlockIdx))}
+                    className="h-9 px-5 text-sm font-medium"
+                  >
+                    <Play size={15} strokeWidth={1.75} />
+                    Start {blindedLabel}
+                  </Button>
+                </div>
               </>
             );
           })()}
-        </div>
+        </motion.div>
       )}
 
-      {/* ===================================================================== */}
-      {/* ACTIVE HIGHWAY TRIAL HUD (FLOATS CLEANLY OVER LIVE 3D GAMEWINDOW)     */}
-      {/* ===================================================================== */}
+      {/* ACTIVE HIGHWAY TRIAL HUD (Slim top bar above 13.5% Rear-View Mirror — zero overlap!) */}
       {isRunningOnHighway && activePlan && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            pointerEvents: 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            padding: '54px 16px 14px 16px'
-          }}
-        >
-          {/* Floating Study Trial Status Banner */}
-          <div
-            style={{
-              alignSelf: 'center',
-              background: 'rgba(6, 10, 20, 0.88)',
-              backdropFilter: 'blur(12px)',
-              border: `1px solid ${
-                trialSubState === 'AWAITING_RESPONSE' ? '#f59e0b' : 'rgba(0, 240, 255, 0.45)'
-              }`,
-              borderRadius: 12,
-              padding: '8px 18px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 16,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.75)',
-              pointerEvents: 'auto'
-            }}
-          >
-            <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: '#94a3b8' }}>
-              PID <strong style={{ color: '#fff' }}>{activePlan.participantId}</strong> • PART{' '}
-              {activePlan.part} •{' '}
-              <strong style={{ color: CONDITION_META[activePlan.condition].accentColor }}>
-                {CONDITION_META[activePlan.condition].shortLabel}
-              </strong>{' '}
-              • TRIAL <strong style={{ color: '#00f0ff' }}>{currentTrialIdx + 1}</strong>/{activePlan.trials.length}
+        <div className="pointer-events-none fixed inset-0 flex flex-col justify-between px-4 pt-2.5 pb-4">
+          {/* Compact Top Status Bar */}
+          <div className="pointer-events-auto mx-auto flex max-w-4xl items-center gap-3 rounded-lg border border-white/[0.10] bg-[#111114]/92 px-3.5 py-1.5 backdrop-blur-md">
+            <div className="flex items-center gap-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+              <span className="font-semibold text-foreground">{activePlan.participantId}</span>
+              <span className="opacity-30">|</span>
+              <span className="text-[#38bdf8]">
+                {getBlindedConditionLabel(activePlan.part, activePlan.conditionOrder)}
+              </span>
+              <span className="opacity-30">|</span>
+              <span>
+                Trial <strong className="text-foreground">{currentTrialIdx + 1}</strong>/{activePlan.trials.length}
+              </span>
             </div>
 
-            <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.14)' }} />
+            <div className="hidden h-3.5 w-px bg-white/[0.08] sm:block" />
 
             <div
-              style={{
-                fontSize: 12.5,
-                fontWeight: 700,
-                color: trialSubState === 'AWAITING_RESPONSE' ? '#fbbf24' : '#e2e8f0'
-              }}
+              className={`text-xs font-medium ${
+                trialSubState === 'AWAITING_RESPONSE' || trialSubState === 'WAITING_FOR_CENTER'
+                  ? 'text-[#fbbf24]'
+                  : trialSubState === 'TRIAL_FEEDBACK'
+                    ? 'text-[#34d399]'
+                    : 'text-foreground'
+              }`}
             >
               {statusBanner}
             </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={handleRequestPauseExit}
+              className="ml-1 h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              <LogOut size={12} /> Exit
+            </Button>
           </div>
 
-          {/* Part 1 Interactive Directional Response Dock (Bottom) */}
-          {phase === 'PART1_RUNNING' && (
+          {/* Compact Highway Webcam PIP (Bottom Right, tucked cleanly above dock) */}
+          {isWebcamRunning && trackingMode === 'WEBCAM' && (
             <div
-              style={{
-                alignSelf: 'center',
-                background: 'rgba(6, 10, 20, 0.9)',
-                backdropFilter: 'blur(14px)',
-                border: '1px solid rgba(0, 240, 255, 0.35)',
-                borderRadius: 14,
-                padding: '10px 14px',
-                display: 'flex',
-                gap: 10,
-                pointerEvents: 'auto',
-                boxShadow: '0 10px 34px rgba(0,0,0,0.85)'
-              }}
+              className={`pointer-events-none fixed right-4 bottom-20 w-[148px] overflow-hidden rounded-[10px] border bg-[#09090b] ${
+                faceDetectedNow ? 'border-[#34d399]/60' : 'border-[#fbbf24]/60'
+              }`}
             >
-              <button
-                className="btn btn-accent"
+              <div className="relative aspect-[4/3] w-full">
+                <video
+                  ref={pipVideoRef}
+                  playsInline
+                  muted
+                  className="h-full w-full -scale-x-100 object-cover"
+                />
+                <canvas ref={pipCanvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
+                {visionDiag && (
+                  <div
+                    className={`absolute top-1 left-1 rounded bg-black/75 px-1.5 py-0.5 font-mono text-[9px] tabular-nums ${
+                      fpsOk ? 'text-[#34d399]' : 'text-[#fbbf24]'
+                    }`}
+                  >
+                    {visionDiag.fps} FPS • {currentGaze}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Bottom Directional Response Dock (Part 1) */}
+          {phase === 'PART1_RUNNING' && (
+            <div className="pointer-events-auto mx-auto flex flex-wrap items-center justify-center gap-2 rounded-[10px] border border-white/[0.10] bg-[#111114]/92 p-2 backdrop-blur-md">
+              <Button
+                type="button"
+                variant="outline"
                 disabled={trialSubState !== 'AWAITING_RESPONSE'}
                 onClick={() => completePart1Trial('LEFT_MIRROR')}
-                style={{ minWidth: 120 }}
+                className="h-9 min-w-[112px] gap-1.5 font-mono text-xs"
               >
-                ◀ Left (A / ←)
-              </button>
-              <button
-                className="btn btn-accent"
+                <ArrowLeft size={14} /> Left [A]
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
                 disabled={trialSubState !== 'AWAITING_RESPONSE'}
                 onClick={() => completePart1Trial('FRONT_WINDSHIELD')}
-                style={{ minWidth: 120 }}
+                className="h-9 min-w-[112px] gap-1.5 font-mono text-xs"
               >
-                ▲ Front (W / ↑)
-              </button>
-              <button
-                className="btn btn-accent"
+                <ArrowUp size={14} /> Front [W]
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
                 disabled={trialSubState !== 'AWAITING_RESPONSE'}
                 onClick={() => completePart1Trial('REAR_MIRROR')}
-                style={{ minWidth: 120 }}
+                className="h-9 min-w-[112px] gap-1.5 font-mono text-xs"
               >
-                ▼ Rear (S / ↓)
-              </button>
-              <button
-                className="btn btn-accent"
+                <ArrowDown size={14} /> Rear [S]
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
                 disabled={trialSubState !== 'AWAITING_RESPONSE'}
                 onClick={() => completePart1Trial('RIGHT_MIRROR')}
-                style={{ minWidth: 120 }}
+                className="h-9 min-w-[112px] gap-1.5 font-mono text-xs"
               >
-                Right (D / →) ▶
-              </button>
+                Right [D] <ArrowRight size={14} />
+              </Button>
             </div>
           )}
 
-          {/* Part 2 Mirror Fallback Controls (Shown if simulation mode or after 5000ms fallback timeout) */}
+          {/* Part 2 Mirror Fallback Controls */}
           {phase === 'PART2_RUNNING' && (useSimFallback || showGazeFallbackPrompt || !isWebcamRunning) && (
-            <div
-              style={{
-                alignSelf: 'center',
-                background: 'rgba(6, 10, 20, 0.9)',
-                border: '1px solid rgba(16, 185, 129, 0.45)',
-                borderRadius: 12,
-                padding: '8px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                pointerEvents: 'auto'
-              }}
-            >
-              <span style={{ fontSize: 11, color: '#a7f3d0', fontWeight: 700 }}>
-                {showGazeFallbackPrompt ? 'Fallback Response:' : 'Sim Mirror Check:'}
+            <div className="pointer-events-auto mx-auto flex flex-wrap items-center justify-center gap-2 rounded-[10px] border border-white/[0.10] bg-[#111114]/92 px-3 py-2 backdrop-blur-md">
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {showGazeFallbackPrompt ? 'Fallback:' : 'Mirror Check:'}
               </span>
-              <button
-                className="btn"
-                style={{ fontSize: 11, padding: '5px 10px' }}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
                 disabled={trialSubState !== 'AWAITING_RESPONSE'}
                 onClick={() => onSimulateGaze('LEFT_MIRROR', true)}
+                className="h-8 font-mono text-xs"
               >
-                [1] Left Mirror
-              </button>
-              <button
-                className="btn"
-                style={{ fontSize: 11, padding: '5px 10px' }}
+                [1] Left
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
                 disabled={trialSubState !== 'AWAITING_RESPONSE'}
                 onClick={() => onSimulateGaze('REAR_MIRROR', true)}
+                className="h-8 font-mono text-xs"
               >
-                [4] Rear Mirror
-              </button>
-              <button
-                className="btn"
-                style={{ fontSize: 11, padding: '5px 10px' }}
+                [4] Rear
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
                 disabled={trialSubState !== 'AWAITING_RESPONSE'}
                 onClick={() => onSimulateGaze('RIGHT_MIRROR', true)}
+                className="h-8 font-mono text-xs"
               >
-                [3] Right Mirror
-              </button>
+                [3] Right
+              </Button>
             </div>
           )}
         </div>
       )}
 
-      {/* ===================================================================== */}
-      {/* PART 1 -> PART 2 TRANSITION CARD                                      */}
-      {/* ===================================================================== */}
+      {/* PART 1 -> PART 2 TRANSITION BRIEFING */}
       {phase === 'PART1_TRANSITION' && (
-        <div
-          style={{
-            margin: 'auto',
-            width: '94%',
-            maxWidth: 660,
-            background: '#0b1120',
-            border: '1px solid rgba(16, 185, 129, 0.45)',
-            borderRadius: 16,
-            padding: 28,
-            boxShadow: '0 24px 64px rgba(0,0,0,0.85)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 16
-          }}
+        <motion.div
+          initial={{ opacity: 0, y: 8, scale: 0.99 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ type: 'spring', stiffness: 420, damping: 36, mass: 0.8 }}
+          className="mx-auto my-auto flex w-full max-w-xl flex-col gap-5 rounded-[14px] border border-border bg-card p-6 sm:p-8"
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <ShieldCheck size={24} color="#10b981" />
-            <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff' }}>
-              Part 1 Complete! Ready for Part 2
-            </h2>
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-[#34d399]/30 bg-[#34d399]/10">
+              <ShieldCheck size={18} strokeWidth={1.75} className="text-[#34d399]" />
+            </div>
+            <div>
+              <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-[#34d399]">
+                Part 1 Complete
+              </div>
+              <h2 className="mt-0.5 font-heading text-xl font-semibold tracking-[-0.025em] text-foreground">
+                Ready for Part 2: Mirror Verification
+              </h2>
+            </div>
           </div>
-          <p style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6 }}>
-            All 3 Spatial Localization blocks ({part1Order.map((c) => CONDITION_META[c].shortLabel).join(' → ')}) have been saved. Next, Part 2 evaluates <strong>Persistent Alarm Fatigue</strong> vs. <strong>Closed-Loop Gaze Cancellation</strong> across 2 blocks using your real-time mirror gaze checks.
+
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            All 3 spatial audio localization blocks have been saved. Next, Part 2 evaluates two alert interaction systems across 2 blocks using your mirror checks.
           </p>
 
-          {syncError && (
-            <div
-              style={{
-                background: 'rgba(244, 63, 94, 0.14)',
-                border: '1px solid rgba(244, 63, 94, 0.45)',
-                borderRadius: 10,
-                padding: 12,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 10
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <Button
+              type="button"
+              variant="default"
+              onClick={() => {
+                onStudyVisualModeChange('PART2_MIRROR_HAZARD');
+                setPhase('PART2_READY');
               }}
+              className="h-9 px-5 text-sm font-medium"
             >
-              <span style={{ fontSize: 12, color: '#fda4af' }}>
-                Cloud upload failed ({syncError}). Data is safe locally.
-              </span>
-              {sessionBundle && (
-                <button
-                  className="btn btn-danger"
-                  style={{ fontSize: 11 }}
-                  onClick={() => downloadSessionJson(sessionBundle)}
-                >
-                  <Download size={14} /> Download Local Backup (.json)
-                </button>
-              )}
-            </div>
-          )}
-
-          <button
-            className="btn btn-primary"
-            style={{ padding: '12px 20px', fontSize: 14 }}
-            onClick={() => setPhase('PART2_READY')}
-          >
-            <Play size={16} /> Continue to Part 2 Setup
-          </button>
-        </div>
+              <Play size={15} strokeWidth={1.75} /> Continue to Part 2
+            </Button>
+          </div>
+        </motion.div>
       )}
 
-      {/* ===================================================================== */}
-      {/* STUDY COMPLETE & RESILIENT SYNC SCREEN                                */}
-      {/* ===================================================================== */}
+      {/* STUDY COMPLETE & EXPORT VIEW */}
       {phase === 'STUDY_COMPLETE' && sessionBundle && (
-        <div
-          style={{
-            margin: 'auto',
-            width: '96%',
-            maxWidth: 760,
-            maxHeight: '90vh',
-            overflowY: 'auto',
-            background: '#0b1120',
-            border: '1px solid rgba(16, 185, 129, 0.5)',
-            borderRadius: 16,
-            padding: 28,
-            boxShadow: '0 24px 64px rgba(0,0,0,0.88)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 18
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <CheckCircle2 size={28} color="#10b981" />
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: '#10b981', letterSpacing: '0.08em' }}>
-                  SESSION COMPLETE • {sessionBundle.participant_id}
-                </div>
-                <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff' }}>
-                  Thank You for Participating!
-                </h2>
-              </div>
-            </div>
-
-            {/* Cloud Sync Pill */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 12px',
-                borderRadius: 20,
-                background:
-                  sessionBundle.sync_status === 'SYNCED'
-                    ? 'rgba(16, 185, 129, 0.16)'
-                    : 'rgba(244, 63, 94, 0.18)',
-                border: `1px solid ${
-                  sessionBundle.sync_status === 'SYNCED' ? '#10b981' : '#f43f5e'
-                }`,
-                fontSize: 11.5,
-                fontWeight: 700,
-                color: sessionBundle.sync_status === 'SYNCED' ? '#34d399' : '#fda4af'
-              }}
-            >
-              {sessionBundle.sync_status === 'SYNCED' ? <Cloud size={15} /> : <CloudOff size={15} />}
-              <span>
-                {sessionBundle.sync_status === 'SYNCED'
-                  ? 'Synced to AWS S3 & DynamoDB'
-                  : 'Local Backup Mode (Upload Failed)'}
-              </span>
-            </div>
-          </div>
-
-          {/* Resilient Fallback Banner if Cloud Upload Failed */}
-          {sessionBundle.sync_status !== 'SYNCED' && (
-            <div
-              style={{
-                background: 'rgba(244, 63, 94, 0.16)',
-                border: '1.5px solid #f43f5e',
-                borderRadius: 12,
-                padding: 14,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 12
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <AlertTriangle size={20} color="#fb7185" />
-                <div style={{ fontSize: 12, color: '#fecdd3' }}>
-                  <strong>Cloud upload failed after 2 retries:</strong> {syncError || sessionBundle.last_sync_error}.
-                  <br />
-                  Download the JSON backup below so zero participant telemetry is lost.
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn" onClick={handleRetrySync} disabled={isSyncing}>
-                  <RefreshCw size={14} /> {isSyncing ? 'Retrying...' : 'Retry Sync'}
-                </button>
-                <button
-                  className="btn btn-danger"
-                  onClick={() => downloadSessionJson(sessionBundle)}
-                >
-                  <Download size={14} /> Download Local Backup (.json)
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Quick Session Summary Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-            {part1Order.map((cond) => {
-              const trials = sessionBundle.trials.filter((t) => t.part === 1 && t.condition === cond);
-              const acc = trials.length
-                ? Math.round((trials.filter((t) => t.is_correct).length / trials.length) * 100)
-                : 0;
-              const fb = trials.filter((t) => t.is_front_back_reversal).length;
-              return (
-                <div key={cond} className="telemetry-item">
-                  <div className="telemetry-label">Part 1 • {CONDITION_META[cond].shortLabel}</div>
-                  <div className="telemetry-value" style={{ color: CONDITION_META[cond].accentColor }}>
-                    {acc}% Acc
-                  </div>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                    {fb} Front-Back Reversals
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            {part2Order.map((cond) => {
-              const trials = sessionBundle.trials.filter((t) => t.part === 2 && t.condition === cond);
-              const avgDur = trials.length
-                ? Math.round(trials.reduce((a, b) => a + b.alarm_duration_ms, 0) / trials.length)
-                : 0;
-              const avgWasted = trials.length
-                ? Math.round(trials.reduce((a, b) => a + b.wasted_alarm_ms, 0) / trials.length)
-                : 0;
-              return (
-                <div key={cond} className="telemetry-item">
-                  <div className="telemetry-label">Part 2 • {CONDITION_META[cond].shortLabel}</div>
-                  <div className="telemetry-value" style={{ color: CONDITION_META[cond].accentColor }}>
-                    {avgDur} ms Alarm
-                  </div>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                    Mean Wasted Alarm: {avgWasted} ms
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Export & Finish Actions */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn" onClick={() => downloadSessionJson(sessionBundle)}>
-                <Download size={14} /> Download Session (.json)
-              </button>
-              <button
-                className="btn"
-                onClick={() =>
-                  triggerFileDownload(
-                    `aura_trials_${sessionBundle.participant_id}.csv`,
-                    exportAllToTrialsCsv([sessionBundle]),
-                    'text/csv'
-                  )
-                }
-              >
-                <Download size={14} /> Export Trials (.csv)
-              </button>
-            </div>
-
-            <button className="btn btn-primary" onClick={onClose}>
-              Return to AURA Drive Cockpit
-            </button>
-          </div>
-        </div>
+        <StudyCompleteView
+          sessionBundle={sessionBundle}
+          part1Order={part1Order}
+          part2Order={part2Order}
+          isSyncing={isSyncing}
+          syncError={syncError}
+          onRetrySync={handleRetrySync}
+          onStartNextParticipant={handleStartNextParticipant}
+          onReturnToCockpit={onClose}
+        />
       )}
 
-      {/* ===================================================================== */}
-      {/* PROGRESSIVE MULTI-BUBBLE 0-10 SURVEY MODAL                            */}
-      {/* ===================================================================== */}
+      {/* PROGRESSIVE MULTI-BUBBLE 0-10 SURVEY MODAL */}
       <ProgressiveSurveyModal
         isOpen={surveyModalOpen}
         part={surveyPart}
         completedConditions={surveyCompletedConds}
         initialScoresByCondition={initialScoresMap[surveyPart] || {}}
         currentScoresByCondition={currentScoresMap[surveyPart] || {}}
-        isSubmitting={isSyncing}
+        blindedLabels={blindedLabelsMap}
+        stepContextLabel={`Part ${surveyPart} • Evaluation #${surveyCompletedConds.length}`}
+        isSubmitting={false}
         onSubmit={handleSurveySubmit}
       />
+
+      {/* PAUSE / EXIT CONFIRMATION DIALOG */}
+      <Dialog open={isExitConfirmOpen} onOpenChange={setIsExitConfirmOpen}>
+        <DialogContent className="z-[10800] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Study Block Paused</DialogTitle>
+            <DialogDescription>
+              Completed blocks and surveys remain saved locally. Choose whether to restart this block cleanly or exit back to the cockpit.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSaveCompletedAndExit}
+            >
+              Save Completed & Exit
+            </Button>
+            <Button
+              type="button"
+              variant="default"
+              onClick={handleRestartCurrentBlock}
+            >
+              Restart Current Block
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

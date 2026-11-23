@@ -1,5 +1,6 @@
 import React from 'react';
-import { Volume2, VolumeX, Eye, Radio, Activity, Gamepad2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Volume2, VolumeX, Eye, Radio, Activity, Maximize2 } from 'lucide-react';
 import { InputMode } from '../types/gaze';
 
 interface HeaderHUDProps {
@@ -21,96 +22,97 @@ export const HeaderHUD: React.FC<HeaderHUDProps> = ({
   onOpenStudy,
   onLaunchGame
 }) => {
+  const visionLive = cvMode === 'IN_BROWSER_WEBCAM' || (cvMode === 'CV_WEBSOCKET' && isCvConnected);
+
   return (
-    <header className="hud-header">
-      <div className="brand-section">
-        <span className="brand-badge">AURA DRIVE</span>
+    <header className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-border bg-card px-4 py-2.5">
+      <div className="flex items-center gap-3">
+        <div className="flex h-7 items-center rounded-md border border-border bg-secondary px-2.5 font-mono text-[11px] font-semibold tracking-[0.08em] text-[#38bdf8]">
+          AURA
+        </div>
         <div>
-          <h1 className="brand-title">AURA Drive Cockpit</h1>
-          <p className="brand-subtitle">Gaze-Contingent 3D Spatial Audio ADAS</p>
+          <h1 className="font-heading text-base font-semibold tracking-[-0.02em] text-foreground">
+            AURA Drive Cockpit
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            Gaze-Contingent 3D Spatial Audio ADAS
+          </p>
         </div>
       </div>
 
-      <div className="header-status-group">
-        {/* Audio Engine Status */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Audio Engine Toggle Pill */}
         <button
+          type="button"
           onClick={onToggleAudio}
-          className={`status-pill ${isAudioActive ? 'active' : ''}`}
-          style={{
-            cursor: 'pointer',
-            background: isAudioActive ? 'rgba(16, 185, 129, 0.16)' : 'rgba(244, 63, 94, 0.12)',
-            borderColor: isAudioActive ? 'rgba(16, 185, 129, 0.45)' : 'rgba(244, 63, 94, 0.35)',
-            color: '#fff'
-          }}
-          title={isAudioActive ? 'Click to Mute 3D Spatial Audio' : 'Click to Enable 3D HRTF Spatial Audio'}
+          className={`inline-flex h-8 cursor-pointer items-center gap-2 rounded-full border px-3 text-xs font-medium transition-colors ${isAudioActive
+              ? 'border-[#34d399]/35 bg-[#34d399]/10 text-foreground'
+              : 'border-border bg-popover text-muted-foreground hover:text-foreground'
+            }`}
+          title={isAudioActive ? 'Mute 3D Spatial Audio' : 'Enable 3D HRTF Spatial Audio'}
         >
           {isAudioActive ? (
-            <Volume2 size={14} color="var(--accent-emerald)" />
+            <Volume2 size={14} strokeWidth={1.75} className="text-[#34d399]" />
           ) : (
-            <VolumeX size={14} color="var(--accent-rose)" />
+            <VolumeX size={14} strokeWidth={1.75} className="text-[#f87171]" />
           )}
-          <span style={{ fontWeight: 600 }}>
-            {isAudioActive ? '3D HRTF Audio: ON' : '3D Audio: Muted (Click to Enable)'}
-          </span>
+          <span>{isAudioActive ? '3D Audio: On' : '3D Audio: Muted'}</span>
         </button>
 
-        {/* CV Bridge / In-Browser Camera Status */}
-        <div className="status-pill">
+        {/* Vision Status Pill */}
+        <div className="inline-flex h-8 items-center gap-2 rounded-full border border-border bg-popover px-3 text-xs text-muted-foreground">
           <Eye
             size={14}
-            color={
-              cvMode === 'IN_BROWSER_WEBCAM' || isCvConnected
-                ? 'var(--accent-emerald)'
-                : 'var(--accent-cyan)'
-            }
+            strokeWidth={1.75}
+            className={visionLive ? 'text-[#34d399]' : 'text-[#38bdf8]'}
           />
           <span>
             {cvMode === 'IN_BROWSER_WEBCAM'
-              ? 'Vision: Live Webcam (MediaPipe)'
+              ? 'Webcam (MediaPipe)'
               : cvMode === 'CV_WEBSOCKET' && isCvConnected
-              ? 'Vision: Python CV Stream'
-              : 'Gaze: Sim Mode (Keys 1/2/3/4)'}
+                ? 'Python CV'
+                : 'Sim Keys 1–4'}
           </span>
           <span
-            className={`status-dot ${
-              cvMode === 'IN_BROWSER_WEBCAM' || isCvConnected ? 'active pulse' : ''
-            }`}
+            className={`size-1.5 rounded-full ${visionLive ? 'bg-[#34d399]' : 'bg-[#71717a]'
+              }`}
           />
         </div>
 
-        {/* CARLA Simulator Bridge Status */}
-        <div className="status-pill">
-          <Radio size={14} color={isCarlaConnected ? 'var(--accent-emerald)' : 'var(--text-dim)'} />
-          <span>{isCarlaConnected ? 'CARLA: Linked' : 'Sim: Built-In 3D Engine'}</span>
-          <span className={`status-dot ${isCarlaConnected ? 'active' : ''}`} />
+        {/* CARLA / Built-in 3D Engine Status Pill */}
+        <div className="hidden h-8 items-center gap-2 rounded-full border border-border bg-popover px-3 text-xs text-muted-foreground sm:inline-flex">
+          <Radio
+            size={14}
+            strokeWidth={1.75}
+            className={isCarlaConnected ? 'text-[#34d399]' : 'text-muted-foreground'}
+          />
+          <span>{isCarlaConnected ? 'CARLA Linked' : 'Built-in 3D'}</span>
         </div>
 
-        {/* Launch Fullscreen Driver Game Mode Button */}
-        <button
+        {/* Secondary CTA: Fullscreen Cockpit */}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
           onClick={onLaunchGame}
-          className="btn"
-          style={{
-            background: 'linear-gradient(135deg, rgba(0, 240, 255, 0.22), rgba(99, 102, 241, 0.3))',
-            borderColor: 'rgba(0, 240, 255, 0.55)',
-            color: '#fff',
-            fontWeight: 700,
-            padding: '7px 14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            boxShadow: '0 0 15px rgba(0, 240, 255, 0.25)'
-          }}
+          className="h-8 gap-1.5 text-xs"
           title="Expand 3D Driving Simulator to Fullscreen Mode"
         >
-          <Gamepad2 size={15} color="#00f0ff" />
-          <span>Fullscreen Cockpit</span>
-        </button>
+          <Maximize2 size={13} strokeWidth={1.75} />
+          <span>Fullscreen</span>
+        </Button>
 
-        {/* HCI Evaluation Study Modal Button */}
-        <button onClick={onOpenStudy} className="btn btn-primary" style={{ padding: '7px 14px' }}>
-          <Activity size={14} />
-          <span>Run HCI Study</span>
-        </button>
+        {/* Single Primary CTA per viewport: Run User Study */}
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          onClick={onOpenStudy}
+          className="h-8 gap-1.5 px-3.5 text-xs font-medium"
+        >
+          <Activity size={13} strokeWidth={1.75} />
+          <span>Run User Study</span>
+        </Button>
       </div>
     </header>
   );

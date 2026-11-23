@@ -963,7 +963,7 @@ export class GameEngine {
 
       whiteNoise.start(now);
       whiteNoise.stop(now + 0.35);
-    } catch {}
+    } catch { }
   }
 
   // --- PARTICLE SYSTEM ---
@@ -1221,8 +1221,8 @@ export class GameEngine {
       customSpeed !== undefined
         ? customSpeed
         : role === 'cruiser'
-        ? this.playerSpeed - 4.0
-        : this.playerSpeed + 6.5 + Math.random() * 6.0;
+          ? this.playerSpeed - 4.0
+          : this.playerSpeed + 6.5 + Math.random() * 6.0;
 
     return {
       mesh: carGroup,
@@ -1356,8 +1356,8 @@ export class GameEngine {
       const role: TrafficCarData['role'] = isSameLane
         ? 'tailgater'
         : Math.random() < 0.35
-        ? 'blind_spot_linger'
-        : 'overtaker';
+          ? 'blind_spot_linger'
+          : 'overtaker';
       const types: TrafficVehicleType[] = ['sedan', 'sport', 'suv', 'truck'];
       const type = isSameLane ? 'sport' : types[Math.floor(Math.random() * types.length)];
       const speed = this.playerSpeed + (isSameLane ? 8.5 : 5.5 + Math.random() * 5.0);
@@ -1394,7 +1394,7 @@ export class GameEngine {
     ctx.fillRect(0, 0, w, h);
 
     // Glowing border frame
-    ctx.strokeStyle = this.activeAlert ? '#ef4444' : '#00f0ff';
+    ctx.strokeStyle = !this.suppressStudyVisualAlerts && this.activeAlert ? '#f87171' : '#38bdf8';
     ctx.lineWidth = 4;
     ctx.strokeRect(4, 4, w - 8, h - 8);
 
@@ -1420,15 +1420,17 @@ export class GameEngine {
     ctx.fillStyle = '#00f0ff';
     ctx.fillRect(egoMiniX - 7, 130, 14, 24);
 
-    // Nearby traffic dots in cluster mini-map
-    this.trafficCars.forEach((tc) => {
-      if (Math.abs(tc.mesh.position.z) < 40) {
-        const tx = 24 + ((tc.currentX + 8) / 16) * 150;
-        const ty = 140 + (tc.mesh.position.z / 40) * 75;
-        ctx.fillStyle = tc.isAcknowledged ? '#10b981' : '#f43f5e';
-        ctx.fillRect(tx - 6, Math.max(56, Math.min(212, ty)) - 10, 12, 20);
-      }
-    });
+    // Nearby traffic dots in cluster mini-map (suppressed during empirical study runs to prevent directional peeking)
+    if (!this.suppressStudyVisualAlerts) {
+      this.trafficCars.forEach((tc) => {
+        if (Math.abs(tc.mesh.position.z) < 40) {
+          const tx = 24 + ((tc.currentX + 8) / 16) * 150;
+          const ty = 140 + (tc.mesh.position.z / 40) * 75;
+          ctx.fillStyle = tc.isAcknowledged ? '#10b981' : '#f43f5e';
+          ctx.fillRect(tx - 6, Math.max(56, Math.min(212, ty)) - 10, 12, 20);
+        }
+      });
+    }
 
     // Center Digital Speedometer
     ctx.fillStyle = speedKmh > 130 ? '#ef4444' : '#ffffff';
@@ -1459,18 +1461,22 @@ export class GameEngine {
     ctx.fillRect(200, 210, 400 * rpmRatio, 16);
 
     // Top Status Banner
-    if (this.activeAlert) {
+    if (this.suppressStudyVisualAlerts) {
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 18px "Inter", sans-serif';
+      ctx.fillText('AUTOPILOT • 100 KM/H STUDY CRUISE', 320, 36);
+    } else if (this.activeAlert) {
       ctx.fillStyle = '#ef4444';
       ctx.font = 'bold 22px "Inter", sans-serif';
-      ctx.fillText(`⚠ CHECK ${this.activeAlert.toUpperCase()} MIRROR!`, 320, 38);
+      ctx.fillText(`CHECK ${this.activeAlert.toUpperCase()} MIRROR`, 320, 38);
     } else if (this.activeFrontWarning) {
       ctx.fillStyle = '#f59e0b';
       ctx.font = 'bold 22px "Inter", sans-serif';
-      ctx.fillText('⚠ FORWARD OBSTACLE AHEAD', 320, 38);
+      ctx.fillText('FORWARD OBSTACLE AHEAD', 320, 38);
     } else {
       ctx.fillStyle = '#10b981';
       ctx.font = 'bold 18px "Inter", sans-serif';
-      ctx.fillText('● 3D HRTF SPATIAL ADAS ACTIVE', 320, 36);
+      ctx.fillText('3D HRTF SPATIAL ADAS ACTIVE', 320, 36);
     }
 
     this.clusterTexture.needsUpdate = true;
@@ -1595,7 +1601,7 @@ export class GameEngine {
     try {
       this.renderer.dispose();
       this.renderer.forceContextLoss();
-    } catch {}
+    } catch { }
   }
 
   public start() {
@@ -1884,8 +1890,8 @@ export class GameEngine {
       this.cameraMode === 'chase'
         ? this.chaseCamera
         : this.cameraMode === 'hood'
-        ? this.hoodCamera
-        : this.mainCamera;
+          ? this.hoodCamera
+          : this.mainCamera;
 
     // Apply Camera Trauma / Shake
     const shake = Math.pow(this.cameraTrauma, 2);
@@ -2305,31 +2311,38 @@ export class GameEngine {
 
     // Update 3D Ground Sensor Ring & Dashboard Ambient LED Strip colors
     const flashFast = Math.floor(this.elapsedTime * 7) % 2 === 0;
+    const showVisualAlert = !this.suppressStudyVisualAlerts;
     if (this.sensorZoneLeft) {
       const mat = this.sensorZoneLeft.material as THREE.MeshBasicMaterial;
-      mat.color.setHex(this.activeAlert === 'left' ? (flashFast ? 0xef4444 : 0xf59e0b) : 0x00f0ff);
-      mat.opacity = this.activeAlert === 'left' ? 0.45 : 0.12;
+      mat.color.setHex(
+        showVisualAlert && this.activeAlert === 'left' ? (flashFast ? 0xef4444 : 0xf59e0b) : 0x38bdf8
+      );
+      mat.opacity = showVisualAlert && this.activeAlert === 'left' ? 0.45 : 0.12;
     }
     if (this.sensorZoneRight) {
       const mat = this.sensorZoneRight.material as THREE.MeshBasicMaterial;
-      mat.color.setHex(this.activeAlert === 'right' ? (flashFast ? 0xef4444 : 0xf59e0b) : 0x00f0ff);
-      mat.opacity = this.activeAlert === 'right' ? 0.45 : 0.12;
+      mat.color.setHex(
+        showVisualAlert && this.activeAlert === 'right' ? (flashFast ? 0xef4444 : 0xf59e0b) : 0x38bdf8
+      );
+      mat.opacity = showVisualAlert && this.activeAlert === 'right' ? 0.45 : 0.12;
     }
     if (this.sensorZoneRear) {
       const mat = this.sensorZoneRear.material as THREE.MeshBasicMaterial;
-      mat.color.setHex(this.activeAlert === 'rear' ? (flashFast ? 0xef4444 : 0xf59e0b) : 0x00f0ff);
-      mat.opacity = this.activeAlert === 'rear' ? 0.45 : 0.1;
+      mat.color.setHex(
+        showVisualAlert && this.activeAlert === 'rear' ? (flashFast ? 0xef4444 : 0xf59e0b) : 0x38bdf8
+      );
+      mat.opacity = showVisualAlert && this.activeAlert === 'rear' ? 0.45 : 0.1;
     }
     if (this.dashAmbientStrip) {
       const mat = this.dashAmbientStrip.material as THREE.MeshBasicMaterial;
       mat.color.setHex(
-        this.activeAlert
+        showVisualAlert && this.activeAlert
           ? flashFast
             ? 0xef4444
             : 0xf59e0b
-          : this.activeFrontWarning
-          ? 0xf59e0b
-          : 0x00f0ff
+          : showVisualAlert && this.activeFrontWarning
+            ? 0xf59e0b
+            : 0x38bdf8
       );
     }
 

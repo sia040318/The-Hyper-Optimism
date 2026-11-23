@@ -6,9 +6,9 @@ import { AudioControlPanel } from './components/AudioControlPanel';
 import { ScenarioPanel } from './components/ScenarioPanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
 import { DriverCameraPIP } from './components/DriverCameraPIP';
-import { EvaluationModal } from './components/evaluation/EvaluationModal';
 import { StudyOrchestrator, StudyVisualMode } from './components/evaluation/StudyOrchestrator';
 import { AdminDashboard } from './components/admin/AdminDashboard';
+import { Button } from '@/components/ui/button';
 
 import { SpatialAudioEngine } from './audio/SpatialAudioEngine';
 import { CVBridgeService } from './services/CVBridgeService';
@@ -20,6 +20,7 @@ import { ThreatObstacle, ScenarioType, ProxyTarget } from './types/threats';
 import { GazeZone, HeadPose, InputMode } from './types/gaze';
 import { PanningModel, SoundType } from './types/audio';
 import { getScenarioThreats, createThreat } from './utils/threatScenarios';
+import { Car, Columns2, Radar, Volume2, VolumeX } from 'lucide-react';
 
 export const App: React.FC = () => {
   // Services (singletons stored in useMemo)
@@ -41,7 +42,6 @@ export const App: React.FC = () => {
   const [volume, setVolume] = useState(0.8);
   const [panningModel, setPanningModel] = useState<PanningModel>('HRTF');
   const [soundType, setSoundType] = useState<SoundType>('chime');
-  const [isStudyModalOpen, setIsStudyModalOpen] = useState(false);
 
   // Empirical Study Orchestrator & Hidden Admin Portal Routing
   const initialQuery = useMemo(() => {
@@ -64,7 +64,6 @@ export const App: React.FC = () => {
   const [isGameFullscreen, setIsGameFullscreen] = useState(false);
   const gameWindowRef = useRef<GameWindowHandle>(null);
 
-  // Primary threat is first threat in list
   const primaryThreat = threats[0] || null;
 
   // Initialize CV & CARLA Bridges and Audio
@@ -127,13 +126,11 @@ export const App: React.FC = () => {
     }
   };
 
-  // Update audio engine when primary threat changes (sandbox/demo mode only)
   useEffect(() => {
     if (isOrchestratorOpen) return;
     audioEngine.setThreat(primaryThreat);
   }, [primaryThreat, audioEngine, isOrchestratorOpen]);
 
-  // Traffic Event Handler from Three.js Game Engine
   const handleTrafficEvent = useCallback(
     (event: TrafficEvent) => {
       if (isOrchestratorOpen) return;
@@ -149,7 +146,6 @@ export const App: React.FC = () => {
     [isAudioActive, audioEngine, isOrchestratorOpen]
   );
 
-  // Live Threats Stream from 3D GameEngine (keeps 2D Radar & 3D HRTF Audio synced with 3D Traffic!)
   const handleGameThreatsUpdate = useCallback(
     (gameThreats: ThreatObstacle[]) => {
       if (isOrchestratorOpen) return;
@@ -167,7 +163,6 @@ export const App: React.FC = () => {
     [audioEngine]
   );
 
-  // Synchronize gaze with game window mirror check acknowledgment
   useEffect(() => {
     if (currentGaze === 'LEFT_MIRROR') {
       gameWindowRef.current?.notifyMirrorCheck('left');
@@ -178,12 +173,11 @@ export const App: React.FC = () => {
     }
   }, [currentGaze]);
 
-  // Synchronize driver head pose with 3D cockpit camera
   useEffect(() => {
     gameWindowRef.current?.updateDriverHeadPose(headPose.yaw, headPose.pitch);
   }, [headPose]);
 
-  // Global Keyboard Shortcuts (Ctrl+Shift+A for Admin Portal, 1/2/3/4 for Gaze, C for Camera, Esc for Fullscreen)
+  // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
@@ -201,7 +195,7 @@ export const App: React.FC = () => {
         return;
       }
 
-      if (isStudyModalOpen || isOrchestratorOpen || isAdminOpen) return;
+      if (isOrchestratorOpen || isAdminOpen) return;
 
       if (e.key === '1') {
         e.preventDefault();
@@ -222,7 +216,7 @@ export const App: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cvBridge, isGameFullscreen, isStudyModalOpen, isOrchestratorOpen, isAdminOpen]);
+  }, [cvBridge, isGameFullscreen, isOrchestratorOpen, isAdminOpen]);
 
   // Continuous physics animation loop ONLY when in standalone 2D_RADAR mode
   useEffect(() => {
@@ -279,14 +273,12 @@ export const App: React.FC = () => {
     return () => cancelAnimationFrame(animId);
   }, [currentScenario, stageView, isGameFullscreen]);
 
-  // Handler for user moving threat on radar
   const handleThreatMoved = (updatedThreat: ThreatObstacle) => {
     audioEngine.resetAcknowledgments();
     setCurrentScenario('MANUAL');
     setThreats([updatedThreat]);
   };
 
-  // Scenario change handler (triggers in BOTH 3D Game and 2D Radar!)
   const handleSelectScenario = (sc: ScenarioType) => {
     audioEngine.resetAcknowledgments();
     setCurrentScenario(sc);
@@ -294,7 +286,6 @@ export const App: React.FC = () => {
     gameWindowRef.current?.triggerScenario(sc);
   };
 
-  // Audio Toggle
   const handleToggleAudio = async () => {
     if (isAudioActive) {
       audioEngine.stop();
@@ -352,7 +343,6 @@ export const App: React.FC = () => {
 
   return (
     <div className="app-container">
-      {/* Top Header HUD */}
       <HeaderHUD
         isAudioActive={isAudioActive}
         onToggleAudio={handleToggleAudio}
@@ -379,7 +369,7 @@ export const App: React.FC = () => {
             onTestDirection={handleTestDirection}
           />
 
-          <div className="glass-panel">
+          <div className="rounded-[10px] border border-border bg-card p-4">
             <ScenarioPanel
               currentScenario={currentScenario}
               onSelectScenario={handleSelectScenario}
@@ -387,61 +377,57 @@ export const App: React.FC = () => {
           </div>
         </aside>
 
-        {/* Column 2: Center Cockpit Stage (Cabin Mirrors + 3D Game / 2D Radar) */}
-        <section className="radar-stage">
-          {/* Stage View Switcher Header */}
-          <div className="stage-toolbar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  background: '#00f0ff',
-                  boxShadow: '0 0 8px #00f0ff'
-                }}
-              />
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  color: 'var(--text-main)',
-                  letterSpacing: '0.06em'
-                }}
-              >
-                VIRTUAL COCKPIT & SPATIAL PROXY VIEWPORT
+        {/* Column 2: Center Cockpit Stage */}
+        <section className="flex min-h-[420px] flex-col gap-2.5 overflow-hidden rounded-[10px] border border-border bg-card p-3">
+          {/* Stage View Switcher Toolbar */}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-popover/60 px-3 py-1.5">
+            <div className="flex items-center gap-2">
+              <span className="size-2 rounded-full bg-[#38bdf8]" />
+              <span className="font-mono text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">
+                Virtual Cockpit Viewport
               </span>
             </div>
 
-            <div style={{ display: 'flex', gap: '6px' }}>
+            <div className="inline-flex gap-1 rounded-md border border-border bg-background p-0.5">
               <button
-                className={`btn ${stageView === '3D_GAME' ? 'btn-primary' : ''}`}
+                type="button"
                 onClick={() => setStageView('3D_GAME')}
-                style={{ fontSize: '11px', padding: '5px 12px' }}
+                className={`inline-flex cursor-pointer items-center gap-1.5 rounded-[4px] px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  stageView === '3D_GAME'
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
               >
-                🎮 3D Highway Cockpit
+                <Car size={12} /> 3D Cockpit
               </button>
               <button
-                className={`btn ${stageView === 'SPLIT' ? 'btn-primary' : ''}`}
+                type="button"
                 onClick={() => setStageView('SPLIT')}
-                style={{ fontSize: '11px', padding: '5px 12px' }}
+                className={`inline-flex cursor-pointer items-center gap-1.5 rounded-[4px] px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  stageView === 'SPLIT'
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
               >
-                ⚡ Split 3D + Radar
+                <Columns2 size={12} /> Split
               </button>
               <button
-                className={`btn ${stageView === '2D_RADAR' ? 'btn-primary' : ''}`}
+                type="button"
                 onClick={() => {
                   setStageView('2D_RADAR');
                   setThreats(getScenarioThreats(currentScenario));
                 }}
-                style={{ fontSize: '11px', padding: '5px 12px' }}
+                className={`inline-flex cursor-pointer items-center gap-1.5 rounded-[4px] px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  stageView === '2D_RADAR'
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
               >
-                📡 2D Tactical Radar
+                <Radar size={12} /> 2D Radar
               </button>
             </div>
           </div>
 
-          {/* Interactive Cabin Mirror Status Bar */}
           <CockpitHUD
             currentGaze={currentGaze}
             activeTarget={primaryThreat ? primaryThreat.proxyTarget : null}
@@ -449,90 +435,71 @@ export const App: React.FC = () => {
             onSelectGaze={handleSimulateGaze}
           />
 
-          {/* Single Persistent 3D Game Window (Expands seamlessly to Fullscreen when toggled or during Empirical Study!) */}
+          {/* Single Persistent 3D Game Window */}
           <div
+            className={
+              isGameFullscreen || isStudyHighwayActive
+                ? 'fixed inset-0 z-[9998] flex flex-col bg-background'
+                : 'relative w-full overflow-hidden rounded-[10px] border border-border bg-background'
+            }
             style={
               isGameFullscreen || isStudyHighwayActive
-                ? {
-                    position: 'fixed',
-                    inset: 0,
-                    zIndex: 9998,
-                    background: '#060a14',
-                    display: 'flex',
-                    flexDirection: 'column'
-                  }
+                ? undefined
                 : {
                     display: showGameView ? 'flex' : 'none',
                     flex: stageView === 'SPLIT' ? 1.25 : 1,
-                    minHeight: stageView === 'SPLIT' ? '220px' : '300px',
-                    width: '100%',
-                    borderRadius: '10px',
-                    overflow: 'hidden',
-                    position: 'relative',
-                    border: '1px solid rgba(0, 240, 255, 0.35)',
-                    boxShadow: '0 6px 28px rgba(0, 0, 0, 0.65)'
+                    minHeight: stageView === 'SPLIT' ? '220px' : '300px'
                   }
             }
           >
-            {/* Floating Quick-Scenario Bar when in Sandbox Fullscreen Mode */}
             {isGameFullscreen && !isStudyHighwayActive && (
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: '44px',
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  zIndex: 25,
-                  background: 'rgba(9, 13, 22, 0.88)',
-                  backdropFilter: 'blur(12px)',
-                  border: '1px solid rgba(0, 240, 255, 0.3)',
-                  borderRadius: '20px',
-                  padding: '5px 14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  boxShadow: '0 8px 30px rgba(0,0,0,0.75)'
-                }}
-              >
-                <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>
-                  INJECT SCENARIO:
+              <div className="absolute bottom-11 left-1/2 z-[25] flex -translate-x-1/2 flex-wrap items-center gap-1.5 rounded-lg border border-white/[0.10] bg-[#111114]/92 px-3 py-1.5 backdrop-blur-md">
+                <span className="mr-1 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
+                  Scenario:
                 </span>
-                <button
-                  className="btn"
-                  style={{ fontSize: '10px', padding: '3px 8px' }}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
                   onClick={() => handleSelectScenario('BLIND_SPOT_LEFT')}
                 >
                   Left Blind Spot
-                </button>
-                <button
-                  className="btn"
-                  style={{ fontSize: '10px', padding: '3px 8px' }}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
                   onClick={() => handleSelectScenario('BLIND_SPOT_RIGHT')}
                 >
                   Right Blind Spot
-                </button>
-                <button
-                  className="btn"
-                  style={{ fontSize: '10px', padding: '3px 8px' }}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
                   onClick={() => handleSelectScenario('REAR_TAILGATER')}
                 >
                   Rear Tailgater
-                </button>
-                <button
-                  className="btn"
-                  style={{ fontSize: '10px', padding: '3px 8px' }}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
                   onClick={() => handleSelectScenario('FRONT_CUT_IN')}
                 >
                   Front Cut-In
-                </button>
-                <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.15)' }} />
-                <button
-                  className={`btn ${isAudioActive ? 'btn-primary' : 'btn-danger'}`}
-                  style={{ fontSize: '10px', padding: '3px 10px' }}
+                </Button>
+                <div className="mx-1 h-4 w-px bg-white/[0.10]" />
+                <Button
+                  type="button"
+                  variant={isAudioActive ? 'outline' : 'destructive'}
+                  size="xs"
                   onClick={handleToggleAudio}
+                  className={isAudioActive ? 'border-[#34d399]/40 text-[#34d399]' : ''}
                 >
-                  {isAudioActive ? '🔊 3D Audio ON' : '🔇 Enable 3D Audio'}
-                </button>
+                  {isAudioActive ? <Volume2 size={12} /> : <VolumeX size={12} />}
+                  {isAudioActive ? 'Audio On' : 'Enable Audio'}
+                </Button>
               </div>
             )}
 
@@ -550,9 +517,8 @@ export const App: React.FC = () => {
             />
           </div>
 
-          {/* 2D Tactical Radar */}
           {(stageView === '2D_RADAR' || stageView === 'SPLIT') && (
-            <div style={{ flex: 1, minHeight: '180px', display: 'flex', width: '100%' }}>
+            <div className="flex min-h-[200px] w-full flex-1">
               <RadarCanvas
                 threats={threats}
                 currentGaze={currentGaze}
@@ -563,7 +529,7 @@ export const App: React.FC = () => {
           )}
         </section>
 
-        {/* Column 3: Telemetry, Gaze, and In-Browser Vision */}
+        {/* Column 3: Telemetry & Driver Vision */}
         <aside className="side-column">
           <DriverCameraPIP
             currentGaze={currentGaze}
@@ -586,16 +552,7 @@ export const App: React.FC = () => {
         </aside>
       </main>
 
-      {/* Legacy Quick Sandbox Evaluation Modal */}
-      <EvaluationModal
-        isOpen={isStudyModalOpen}
-        onClose={() => setIsStudyModalOpen(false)}
-        audioEngine={audioEngine}
-        isAudioActive={isAudioActive}
-        onAudioActiveChange={setIsAudioActive}
-      />
-
-      {/* Full Empirical HCI Study Suite Orchestrator */}
+      {/* Empirical HCI Study Suite Orchestrator */}
       <StudyOrchestrator
         isOpen={isOrchestratorOpen}
         onClose={() => {
@@ -607,10 +564,11 @@ export const App: React.FC = () => {
         audioEngine={audioEngine}
         gameWindowRef={gameWindowRef}
         currentGaze={currentGaze}
+        volume={volume}
+        onVolumeChange={handleVolumeChange}
         onSimulateGaze={handleSimulateGaze}
         onAudioActiveChange={setIsAudioActive}
         onStudyVisualModeChange={setStudyVisualMode}
-        onOpenLegacySandboxStudy={() => setIsStudyModalOpen(true)}
       />
 
       {/* Hidden Researcher Admin Portal (?admin=1 or Ctrl+Shift+A) */}

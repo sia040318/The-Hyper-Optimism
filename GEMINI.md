@@ -6,6 +6,10 @@
 > - All AWS operations must strictly belong to this ADAS project (`gaze-contingent-3d-audio-adas`).
 > - S3 buckets, CloudFront distributions, IAM roles, or any other cloud resources MUST use project-specific prefixes (e.g., `adas-gaze-audio-*`) and MUST NOT touch, inspect, or query any unrelated buckets or stacks.
 
+## Mandatory UI & Design System Rules
+- **Before creating or editing any UI component or page, ALWAYS read `DESIGN.md` first. Strictly adhere to its tokens, typography, spacing, and anti-patterns. Build one section at a time, prioritize whitespace and hierarchy, and verify both desktop and mobile layouts.**
+- Active frontend root: `The-Hyper-Optimism/` (Vite + React 19 + TypeScript + Tailwind CSS v4 + shadcn/ui). Design tokens live in `src/globals.css`.
+
 ## Project AWS Deployment Details
 - **Account ID**: `334333507672`
 - **Default Profile Region**: `ap-south-1` (Mumbai)

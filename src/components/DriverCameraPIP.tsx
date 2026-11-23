@@ -1,8 +1,19 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Camera, CameraOff, Eye, Activity, CheckCircle2, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
+import {
+  Camera,
+  CameraOff,
+  Eye,
+  Activity,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  AlertCircle
+} from 'lucide-react';
 import { inBrowserVision } from '../services/InBrowserVisionService';
 import { GazeZone, HeadPose, InBrowserVisionDiagnostics } from '../types/gaze';
 import { ProxyTarget } from '../types/threats';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 
 interface DriverCameraPIPProps {
   currentGaze: GazeZone;
@@ -21,21 +32,36 @@ export const DriverCameraPIP: React.FC<DriverCameraPIPProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isCameraActive, setIsCameraActive] = useState(() => inBrowserVision.getIsRunning());
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
   const [diagnostics, setDiagnostics] = useState<InBrowserVisionDiagnostics | null>(null);
 
-  // Sync canvas dimensions and draw overlays
+  // Sync camera state if started/stopped by StudyOrchestrator & bind stream when expanded
+  useEffect(() => {
+    const running = inBrowserVision.getIsRunning();
+    setIsCameraActive(running);
+    if (running && isExpanded && videoRef.current) {
+      inBrowserVision.attachVideoElement(videoRef.current);
+    }
+    const unsub = inBrowserVision.subscribe((msg) => {
+      if (!isCameraActive && inBrowserVision.getIsRunning()) {
+        setIsCameraActive(true);
+        if (videoRef.current) inBrowserVision.attachVideoElement(videoRef.current);
+      }
+      if (msg.diagnostics) setDiagnostics(msg.diagnostics);
+    });
+    return () => unsub();
+  }, [isExpanded, isCameraActive]);
+
+  // Draw landmarks overlay
   useEffect(() => {
     let animId: number;
-
     const renderOverlay = () => {
       if (isCameraActive && canvasRef.current && videoRef.current) {
         const video = videoRef.current;
         const canvas = canvasRef.current;
-
         if (video.videoWidth > 0 && video.videoHeight > 0) {
           if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
             canvas.width = video.videoWidth;
@@ -43,20 +69,13 @@ export const DriverCameraPIP: React.FC<DriverCameraPIPProps> = ({
           }
           inBrowserVision.drawDebugOverlay(canvas);
         }
-
-        const diag = inBrowserVision.getLastDiagnostics();
-        if (diag) {
-          setDiagnostics(diag);
-        }
       }
       animId = requestAnimationFrame(renderOverlay);
     };
-
     animId = requestAnimationFrame(renderOverlay);
     return () => cancelAnimationFrame(animId);
   }, [isCameraActive]);
 
-  // Toggle Camera
   const handleToggleCamera = async () => {
     setErrorMessage(null);
 
@@ -75,321 +94,187 @@ export const DriverCameraPIP: React.FC<DriverCameraPIPProps> = ({
         setIsCameraActive(true);
         onCameraActiveChange(true);
       } else {
-        setErrorMessage('Failed to access webcam or load MediaPipe vision model.');
+        setErrorMessage('Failed to access webcam or load MediaPipe model.');
         setIsCameraActive(false);
         onCameraActiveChange(false);
       }
     }
   };
 
-  // Check if current gaze matches the active threat target
-  const isTargetMatched = activeThreatTarget && currentGaze === activeThreatTarget;
+  const isTargetMatched = Boolean(activeThreatTarget && currentGaze === activeThreatTarget);
 
   return (
-    <div className="glass-panel" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-      {/* Header Bar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Eye size={16} className={isCameraActive ? 'text-cyan' : 'text-muted'} />
-          <span style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.05em' }}>
-            DRIVER MONITORING (CV)
+    <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Eye
+            size={14}
+            strokeWidth={1.75}
+            className={isCameraActive ? 'text-[#34d399]' : 'text-muted-foreground'}
+          />
+          <span className="font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            Driver Monitoring
           </span>
           {isCameraActive && (
-            <span
-              style={{
-                fontSize: '10px',
-                padding: '2px 6px',
-                borderRadius: '4px',
-                background: 'rgba(16, 185, 129, 0.2)',
-                color: '#10b981',
-                border: '1px solid rgba(16, 185, 129, 0.4)',
-                fontWeight: 600
-              }}
+            <Badge
+              variant="outline"
+              className="border-[#34d399]/35 bg-[#34d399]/10 font-mono text-[10px] text-[#34d399]"
             >
-              ● IN-BROWSER
-            </span>
+              LIVE
+            </Badge>
           )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-muted)',
-              cursor: 'pointer',
-              padding: '2px',
-              display: 'flex',
-              alignItems: 'center'
-            }}
-            title={isExpanded ? 'Collapse' : 'Expand'}
-          >
-            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="cursor-pointer rounded p-1 text-muted-foreground hover:text-foreground"
+          title={isExpanded ? 'Collapse' : 'Expand'}
+        >
+          {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        </button>
       </div>
 
       {isExpanded && (
         <>
-          {/* Video Feed & Canvas Container */}
           <div
-            style={{
-              position: 'relative',
-              width: '100%',
-              aspectRatio: '4 / 3',
-              borderRadius: '8px',
-              overflow: 'hidden',
-              background: '#090d16',
-              border: `1px solid ${isTargetMatched ? 'rgba(16, 185, 129, 0.8)' : 'rgba(255, 255, 255, 0.1)'}`,
-              boxShadow: isTargetMatched ? '0 0 15px rgba(16, 185, 129, 0.3)' : 'none',
-              transition: 'border 0.2s, box-shadow 0.2s'
-            }}
+            className={`relative aspect-[4/3] w-full overflow-hidden rounded-lg border bg-background transition-colors ${
+              isTargetMatched ? 'border-[#34d399]/60' : 'border-border'
+            }`}
           >
             <video
               ref={videoRef}
               playsInline
               muted
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-                transform: 'scaleX(-1)', // Mirror feed naturally
-                display: isCameraActive ? 'block' : 'none'
-              }}
+              className={`h-full w-full -scale-x-100 object-cover ${
+                isCameraActive ? 'block' : 'hidden'
+              }`}
             />
 
             <canvas
               ref={canvasRef}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '100%',
-                pointerEvents: 'none',
-                display: isCameraActive ? 'block' : 'none'
-              }}
+              className={`pointer-events-none absolute inset-0 h-full w-full ${
+                isCameraActive ? 'block' : 'hidden'
+              }`}
             />
 
-            {/* Offline / Placeholder View */}
             {!isCameraActive && (
-              <div
-                style={{
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  color: 'var(--text-muted)',
-                  padding: '16px',
-                  textAlign: 'center'
-                }}
-              >
-                <Camera size={28} style={{ opacity: 0.4 }} />
-                <span style={{ fontSize: '11px' }}>
-                  Enable webcam for live in-browser head pose & iris gaze tracking.
-                </span>
-                <span style={{ fontSize: '10px', color: 'rgba(255, 255, 255, 0.3)' }}>
-                  (No Python server required. Runs 100% locally via WebAssembly GPU)
+              <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-muted-foreground">
+                <Camera size={24} strokeWidth={1.5} className="opacity-50" />
+                <span className="text-xs">Enable webcam for live head pose & iris gaze tracking.</span>
+                <span className="font-mono text-[10px] text-[#71717a]">
+                  100% local MediaPipe WebAssembly
                 </span>
               </div>
             )}
 
-            {/* Closed-Loop Silence Overlay Banner */}
             {isCameraActive && isSilenced && isTargetMatched && (
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: '8px',
-                  left: '8px',
-                  right: '8px',
-                  background: 'rgba(16, 185, 129, 0.9)',
-                  backdropFilter: 'blur(4px)',
-                  color: '#fff',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.4)'
-                }}
-              >
-                <CheckCircle2 size={13} />
-                ALERT CLOSED-LOOP MUTED!
+              <div className="absolute right-2 bottom-2 left-2 flex items-center justify-center gap-1.5 rounded bg-[#34d399]/90 px-2 py-1 font-mono text-[10px] font-semibold text-[#09090b]">
+                <CheckCircle2 size={12} />
+                CLOSED-LOOP MUTED
               </div>
             )}
 
-            {/* FPS and Latency Badge */}
             {isCameraActive && diagnostics && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '6px',
-                  left: '6px',
-                  background: 'rgba(0, 0, 0, 0.65)',
-                  backdropFilter: 'blur(4px)',
-                  padding: '2px 6px',
-                  borderRadius: '4px',
-                  fontSize: '9px',
-                  fontFamily: 'monospace',
-                  color: '#38bdf8',
-                  display: 'flex',
-                  gap: '8px'
-                }}
-              >
+              <div className="absolute top-2 left-2 flex gap-2 rounded bg-black/75 px-2 py-0.5 font-mono text-[10px] tabular-nums text-[#38bdf8]">
                 <span>{diagnostics.fps} FPS</span>
                 <span>{diagnostics.latencyMs} ms</span>
               </div>
             )}
           </div>
 
-          {/* Error Notice */}
           {errorMessage && (
-            <div
-              style={{
-                fontSize: '11px',
-                color: '#ef4444',
-                background: 'rgba(239, 68, 68, 0.1)',
-                padding: '6px 8px',
-                borderRadius: '4px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <AlertCircle size={14} />
+            <div className="flex items-center gap-1.5 rounded-md border border-[#f87171]/30 bg-[#f87171]/10 px-2.5 py-1.5 text-xs text-[#f87171]">
+              <AlertCircle size={13} className="shrink-0" />
               <span>{errorMessage}</span>
             </div>
           )}
 
-          {/* Gaze Target & Dwell Meter */}
           {isCameraActive && (
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '6px',
-                background: 'rgba(255, 255, 255, 0.03)',
-                padding: '8px',
-                borderRadius: '6px',
-                border: '1px solid rgba(255, 255, 255, 0.05)'
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Confirmed Gaze:</span>
+            <div className="space-y-2 rounded-lg border border-border bg-popover/60 p-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Confirmed Gaze</span>
                 <span
-                  style={{
-                    fontWeight: 700,
-                    color:
-                      currentGaze === 'CENTER'
-                        ? '#38bdf8'
-                        : isTargetMatched
-                        ? '#10b981'
-                        : '#f59e0b'
-                  }}
+                  className={`font-mono font-semibold ${
+                    currentGaze === 'CENTER'
+                      ? 'text-[#38bdf8]'
+                      : isTargetMatched
+                        ? 'text-[#34d399]'
+                        : 'text-[#fbbf24]'
+                  }`}
                 >
                   {currentGaze}
                 </span>
               </div>
 
-              {/* Dwell Confirmation Progress Bar */}
               {diagnostics && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'rgba(255, 255, 255, 0.4)' }}>
-                    <span>Dwell Stabilizer (300ms)</span>
-                    <span>{Math.round(diagnostics.dwellProgress * 100)}%</span>
+                <div className="space-y-1">
+                  <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+                    <span>Dwell (300 ms)</span>
+                    <span className="tabular-nums">{Math.round(diagnostics.dwellProgress * 100)}%</span>
                   </div>
-                  <div
-                    style={{
-                      height: '4px',
-                      background: 'rgba(255, 255, 255, 0.1)',
-                      borderRadius: '2px',
-                      overflow: 'hidden'
-                    }}
-                  >
+                  <div className="h-1 overflow-hidden rounded-full bg-white/[0.08]">
                     <div
+                      className="h-full transition-all duration-75"
                       style={{
-                        height: '100%',
                         width: `${diagnostics.dwellProgress * 100}%`,
-                        background: diagnostics.isConfirmed ? '#10b981' : '#00f0ff',
-                        transition: 'width 0.1s linear'
+                        backgroundColor: diagnostics.isConfirmed ? '#34d399' : '#38bdf8'
                       }}
                     />
                   </div>
                 </div>
               )}
 
-              {/* Angle Metrics Grid */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
-                  gap: '4px',
-                  marginTop: '4px',
-                  fontSize: '9px',
-                  fontFamily: 'monospace'
-                }}
-              >
-                <div style={{ background: 'rgba(0, 0, 0, 0.3)', padding: '4px', borderRadius: '3px', textAlign: 'center' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block' }}>YAW</span>
-                  <span style={{ color: Math.abs(headPose.yaw) >= 18 ? '#f59e0b' : '#fff', fontWeight: 600 }}>
+              <div className="grid grid-cols-3 gap-1.5 pt-1 font-mono text-[10px] tabular-nums">
+                <div className="rounded border border-border bg-background py-1 text-center">
+                  <span className="block text-[9px] text-[#71717a]">YAW</span>
+                  <span className={Math.abs(headPose.yaw) >= 14 ? 'text-[#fbbf24]' : 'text-foreground'}>
                     {headPose.yaw}°
                   </span>
                 </div>
-                <div style={{ background: 'rgba(0, 0, 0, 0.3)', padding: '4px', borderRadius: '3px', textAlign: 'center' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block' }}>PITCH</span>
-                  <span style={{ color: headPose.pitch >= 12 ? '#f59e0b' : '#fff', fontWeight: 600 }}>
+                <div className="rounded border border-border bg-background py-1 text-center">
+                  <span className="block text-[9px] text-[#71717a]">PITCH</span>
+                  <span className={headPose.pitch >= 10 ? 'text-[#fbbf24]' : 'text-foreground'}>
                     {headPose.pitch}°
                   </span>
                 </div>
-                <div style={{ background: 'rgba(0, 0, 0, 0.3)', padding: '4px', borderRadius: '3px', textAlign: 'center' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.4)', display: 'block' }}>IRIS</span>
-                  <span style={{ color: '#10b981', fontWeight: 600 }}>
-                    {diagnostics?.irisRatio !== null && diagnostics?.irisRatio !== undefined ? diagnostics.irisRatio.toFixed(2) : '--'}
+                <div className="rounded border border-border bg-background py-1 text-center">
+                  <span className="block text-[9px] text-[#71717a]">IRIS</span>
+                  <span className="text-[#34d399]">
+                    {diagnostics?.irisRatio !== null && diagnostics?.irisRatio !== undefined
+                      ? diagnostics.irisRatio.toFixed(2)
+                      : '--'}
                   </span>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Camera Action Button */}
-          <button
+          <Button
+            type="button"
+            variant={isCameraActive ? 'destructive' : 'outline'}
+            size="sm"
             onClick={handleToggleCamera}
             disabled={isLoading}
-            className={`btn ${isCameraActive ? 'btn-danger' : 'btn-primary'}`}
-            style={{
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              padding: '8px',
-              fontSize: '11px',
-              fontWeight: 600
-            }}
+            className="h-8 w-full text-xs"
           >
             {isLoading ? (
               <>
-                <Activity size={14} className="animate-spin" />
+                <Activity size={13} className="animate-spin" />
                 Initializing MediaPipe...
               </>
             ) : isCameraActive ? (
               <>
-                <CameraOff size={14} />
+                <CameraOff size={13} />
                 Stop Webcam Tracker
               </>
             ) : (
               <>
-                <Camera size={14} />
+                <Camera size={13} />
                 Enable In-Browser Camera
               </>
             )}
-          </button>
+          </Button>
         </>
       )}
     </div>

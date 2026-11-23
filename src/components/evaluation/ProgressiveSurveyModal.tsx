@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { motion } from 'framer-motion';
 import {
   BUBBLE_BADGE_STYLES,
   CONDITION_META,
@@ -7,7 +8,10 @@ import {
   StudyConditionType,
   StudyPartNumber
 } from '../../config/studyConfig';
-import { Sliders, CheckCircle2, Info } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { SlidersHorizontal, CheckCircle2, Info, AlertCircle } from 'lucide-react';
 
 interface ProgressiveSurveyModalProps {
   isOpen: boolean;
@@ -18,6 +22,9 @@ interface ProgressiveSurveyModalProps {
   initialScoresByCondition: Record<string, Record<string, number>>;
   /** Previously saved adjusted scores: cond -> questionId -> score */
   currentScoresByCondition: Record<string, Record<string, number>>;
+  /** Optional blinded participant-facing labels keyed by StudyConditionType */
+  blindedLabels?: Record<string, string>;
+  stepContextLabel?: string;
   isSubmitting?: boolean;
   onSubmit: (updatedScoresByCondition: Record<string, Record<string, number>>) => void;
 }
@@ -40,7 +47,6 @@ function computeVerticalOffsets(values: number[]): number[] {
   if (n <= 1) return offsets;
 
   const threshold = STUDY_PARAMETERS.overlapThresholdUnits;
-  // Sort indices by value while preserving stable index tie-breaking
   const sorted = values
     .map((v, idx) => ({ v, idx }))
     .sort((a, b) => (Math.abs(a.v - b.v) < 1e-6 ? a.idx - b.idx : a.v - b.v));
@@ -76,6 +82,8 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
   completedConditions,
   initialScoresByCondition,
   currentScoresByCondition,
+  blindedLabels,
+  stepContextLabel,
   isSubmitting = false,
   onSubmit
 }) => {
@@ -84,6 +92,8 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
 
   const [scores, setScores] = useState<Record<string, Record<string, number>>>({});
   const [touchedCurrentMap, setTouchedCurrentMap] = useState<Record<string, boolean>>({});
+  const [showUnratedWarning, setShowUnratedWarning] = useState(false);
+  const [confirmDefaultsArmed, setConfirmDefaultsArmed] = useState(false);
   const [activeDrag, setActiveDrag] = useState<{ questionId: string; cond: StudyConditionType } | null>(
     null
   );
@@ -93,22 +103,30 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
 
   const trackRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // Initialize local draft whenever the modal opens for a newly finished block
   useEffect(() => {
     if (!isOpen) return;
     const draft: Record<string, Record<string, number>> = {};
+    const initialTouched: Record<string, boolean> = {};
     completedConditions.forEach((cond) => {
       draft[cond] = {};
       applicableQuestions.forEach((q) => {
         const existing = currentScoresByCondition[cond]?.[q.id];
         draft[cond][q.id] = typeof existing === 'number' ? existing : 5.0;
+        if (cond === latestCond && typeof existing === 'number') {
+          initialTouched[q.id] = true;
+        }
       });
     });
     setScores(draft);
-    setTouchedCurrentMap({});
+    setTouchedCurrentMap(initialTouched);
+    setShowUnratedWarning(false);
+    setConfirmDefaultsArmed(false);
   }, [isOpen, part, completedConditions.join('|')]);
 
   if (!isOpen) return null;
+
+  const getDisplayLabel = (cond: StudyConditionType) =>
+    blindedLabels?.[cond] || CONDITION_META[cond].shortLabel;
 
   const updateScore = (questionId: string, cond: StudyConditionType, nextVal: number) => {
     const snapped = clampAndSnap(nextVal);
@@ -121,6 +139,7 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
     }));
     if (cond === latestCond) {
       setTouchedCurrentMap((prev) => ({ ...prev, [questionId]: true }));
+      setConfirmDefaultsArmed(false);
     }
   };
 
@@ -178,96 +197,71 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
     }
   };
 
-  const latestMeta = latestCond ? CONDITION_META[latestCond] : null;
+  const ratedCount = applicableQuestions.filter((q) => touchedCurrentMap[q.id]).length;
+  const allRated = ratedCount === applicableQuestions.length;
   const blockIndex = completedConditions.length;
+  const latestDisplayLabel = latestCond ? getDisplayLabel(latestCond) : '';
+
+  const handleSubmitClick = () => {
+    if (!allRated && !confirmDefaultsArmed) {
+      setShowUnratedWarning(true);
+      setConfirmDefaultsArmed(true);
+      return;
+    }
+    onSubmit(scores);
+  };
 
   return (
-    <div
-      className="modal-overlay"
-      style={{ zIndex: 10500, background: 'rgba(3, 6, 13, 0.88)', backdropFilter: 'blur(14px)' }}
-    >
-      <div
-        className="modal-content"
-        style={{
-          maxWidth: '820px',
-          width: '96%',
-          border: '1px solid rgba(0, 240, 255, 0.45)',
-          background: 'linear-gradient(180deg, #0b1120 0%, #070b15 100%)'
-        }}
+    <div className="fixed inset-0 z-[10500] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm sm:p-6">
+      <motion.div
+        initial={{ opacity: 0, y: 8, scale: 0.99 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: 'spring', stiffness: 420, damping: 36, mass: 0.8 }}
+        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-[14px] border border-border bg-card"
       >
         {/* Header */}
-        <div
-          className="modal-header"
-          style={{
-            background: 'rgba(15, 23, 42, 0.72)',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.08)'
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 10,
-                background: 'rgba(0, 240, 255, 0.14)',
-                border: '1px solid rgba(0, 240, 255, 0.35)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-            >
-              <Sliders size={18} color="#00f0ff" />
+        <div className="flex flex-col justify-between gap-4 border-b border-border bg-popover/60 px-6 py-5 sm:flex-row sm:items-center">
+          <div className="flex items-start gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-secondary">
+              <SlidersHorizontal size={16} strokeWidth={1.75} className="text-[#38bdf8]" />
             </div>
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#00f0ff', letterSpacing: '0.08em' }}>
-                PART {part} • POST-BLOCK COMPARATIVE EVALUATION (TEST #{blockIndex})
+              <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-[#38bdf8]">
+                {stepContextLabel || `Part ${part} • Evaluation #${blockIndex}`}
               </div>
-              <h2 style={{ fontSize: 16, fontWeight: 800, color: '#fff', marginTop: 2 }}>
-                Rate {latestMeta?.label || latestCond}
-                {blockIndex > 1 ? ' & Recalibrate Previous Ratings' : ''}
+              <h2 className="mt-1 font-heading text-lg font-semibold tracking-[-0.02em] text-foreground">
+                Rate {latestDisplayLabel}
+                {blockIndex > 1 ? ' & Calibrate Prior Ratings' : ''}
               </h2>
             </div>
           </div>
 
-          {/* Condition Bubbles Key */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {/* Blinded Condition Marker Pills */}
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
             {completedConditions.map((cond, idx) => {
               const badge = BUBBLE_BADGE_STYLES[idx] || BUBBLE_BADGE_STYLES[0];
               const isCurrent = idx === completedConditions.length - 1;
               return (
                 <div
                   key={cond}
+                  className="inline-flex items-center gap-2 rounded-full border px-2.5 py-1 font-mono text-[11px]"
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    padding: '4px 10px',
-                    borderRadius: 20,
-                    background: isCurrent ? badge.tint : 'rgba(255,255,255,0.04)',
-                    border: `1px ${isCurrent ? 'solid' : 'dashed'} ${badge.border}`,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: '#f8fafc'
+                    borderColor: isCurrent ? badge.border : 'rgba(255,255,255,0.10)',
+                    backgroundColor: isCurrent ? badge.tint : 'rgba(24,24,27,0.7)',
+                    color: isCurrent ? '#fafafa' : '#a1a1aa'
                   }}
                 >
                   <span
+                    className="inline-flex size-4 items-center justify-center rounded-full text-[10px] font-semibold"
                     style={{
-                      width: 18,
-                      height: 18,
-                      borderRadius: '50%',
-                      background: isCurrent ? badge.solid : 'transparent',
-                      border: `2px solid ${badge.solid}`,
-                      color: isCurrent ? '#040711' : badge.solid,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 10,
-                      fontWeight: 800
+                      backgroundColor: isCurrent ? badge.solid : 'transparent',
+                      border: `1.5px solid ${badge.solid}`,
+                      color: isCurrent ? '#09090b' : badge.solid
                     }}
                   >
                     #{idx + 1}
                   </span>
-                  <span>{CONDITION_META[cond].shortLabel}</span>
+                  <span>{getDisplayLabel(cond)}</span>
                 </div>
               );
             })}
@@ -275,24 +269,17 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="modal-body" style={{ gap: 18, padding: '18px 22px' }}>
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
           {blockIndex > 1 && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                background: 'rgba(168, 85, 247, 0.12)',
-                border: '1px solid rgba(168, 85, 247, 0.32)',
-                borderRadius: 10,
-                padding: '9px 14px',
-                fontSize: 12,
-                color: '#e9d5ff'
-              }}
-            >
-              <Info size={16} color="#c084fc" style={{ flexShrink: 0 }} />
+            <div className="flex items-start gap-2.5 rounded-[10px] border border-border bg-popover px-4 py-3 text-[13px] leading-relaxed text-muted-foreground">
+              <Info size={15} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[#38bdf8]" />
               <span>
-                Your previous rating{blockIndex > 2 ? 's' : ''} ({completedConditions.slice(0, -1).map((_, i) => `#${i + 1}`).join(', ')}) appear on each scale for direct comparison. Drag <strong>any bubble</strong> to fine-tune relative differences after experiencing Test #{blockIndex}.
+                Your ratings from previous blocks (
+                {completedConditions
+                  .slice(0, -1)
+                  .map((_, i) => `#${i + 1}`)
+                  .join(', ')}
+                ) appear on each scale for side-by-side comparison. Drag any marker to adjust relative differences.
               </span>
             </div>
           )}
@@ -300,43 +287,42 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
           {applicableQuestions.map((q) => {
             const values = completedConditions.map((c) => scores[c]?.[q.id] ?? 5.0);
             const yOffsets = computeVerticalOffsets(values);
-            const currentIsTouched = touchedCurrentMap[q.id];
+            const currentIsTouched = Boolean(touchedCurrentMap[q.id]);
 
             return (
               <div
                 key={q.id}
-                style={{
-                  background: 'rgba(15, 23, 42, 0.72)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  borderRadius: 12,
-                  padding: '14px 18px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 10
-                }}
+                className={`space-y-3 rounded-[10px] border bg-[#09090b]/70 p-4 transition-colors sm:p-5 ${
+                  showUnratedWarning && !currentIsTouched
+                    ? 'border-[#fbbf24]/50'
+                    : 'border-border'
+                }`}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+                <div className="flex items-start justify-between gap-3">
                   <div>
-                    <span
-                      style={{
-                        fontSize: 9,
-                        fontWeight: 800,
-                        letterSpacing: '0.09em',
-                        color: '#38bdf8',
-                        display: 'block',
-                        marginBottom: 3
-                      }}
-                    >
+                    <span className="block font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
                       {q.category}
                     </span>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, color: '#f8fafc', lineHeight: 1.4 }}>
+                    <div className="mt-1 text-sm font-medium leading-snug text-foreground">
                       {q.prompt}
                     </div>
                   </div>
+                  <Badge
+                    variant="outline"
+                    className={`shrink-0 font-mono text-[10px] ${
+                      currentIsTouched
+                        ? 'border-[#34d399]/30 bg-[#34d399]/10 text-[#34d399]'
+                        : showUnratedWarning
+                          ? 'border-[#fbbf24]/40 bg-[#fbbf24]/10 text-[#fbbf24]'
+                          : 'border-border text-muted-foreground'
+                    }`}
+                  >
+                    {currentIsTouched ? 'Rated' : 'Default 5.0'}
+                  </Badge>
                 </div>
 
-                {/* Horizontal 0–10 Multi-Bubble Track */}
-                <div style={{ padding: '18px 12px 10px 12px' }}>
+                {/* Horizontal 0–10 Multi-Marker Track */}
+                <div className="px-3 pt-4 pb-3">
                   <div
                     ref={(el) => {
                       trackRefs.current[q.id] = el;
@@ -345,48 +331,27 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
                       if (!latestCond) return;
                       updateScore(q.id, latestCond, clientXToValue(q.id, e.clientX));
                     }}
-                    style={{
-                      position: 'relative',
-                      height: 10,
-                      borderRadius: 999,
-                      background: 'linear-gradient(90deg, rgba(148,163,184,0.22) 0%, rgba(0,240,255,0.28) 100%)',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      cursor: 'pointer',
-                      touchAction: 'none'
-                    }}
+                    className="relative h-2 cursor-pointer touch-none rounded-full border border-white/[0.10] bg-white/[0.06]"
                   >
-                    {/* Tick Marks 0..10 */}
                     {Array.from({ length: 11 }, (_, tick) => (
                       <div
                         key={tick}
+                        className="pointer-events-none absolute -translate-x-1/2"
                         style={{
-                          position: 'absolute',
                           left: `${tick * 10}%`,
-                          top: tick % 5 === 0 ? -4 : 0,
+                          top: tick % 5 === 0 ? -3 : 0,
                           width: 1,
-                          height: tick % 5 === 0 ? 18 : 10,
-                          background: tick % 5 === 0 ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.12)',
-                          transform: 'translateX(-50%)',
-                          pointerEvents: 'none'
+                          height: tick % 5 === 0 ? 14 : 8,
+                          backgroundColor:
+                            tick % 5 === 0 ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.10)'
                         }}
                       >
-                        <span
-                          style={{
-                            position: 'absolute',
-                            top: 20,
-                            left: '50%',
-                            transform: 'translateX(-50%)',
-                            fontSize: 9,
-                            fontFamily: 'var(--font-mono)',
-                            color: 'rgba(148, 163, 184, 0.7)'
-                          }}
-                        >
+                        <span className="absolute top-4 left-1/2 -translate-x-1/2 font-mono text-[10px] tabular-nums text-[#71717a]">
                           {tick}
                         </span>
                       </div>
                     ))}
 
-                    {/* Independent Draggable Bubble Thumbs (#1, #2, #3) */}
                     {completedConditions.map((cond, idx) => {
                       const val = values[idx];
                       const pct =
@@ -407,7 +372,7 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
                           key={cond}
                           role="slider"
                           tabIndex={0}
-                          aria-label={`${q.category} rating for ${CONDITION_META[cond].label}`}
+                          aria-label={`${q.category} rating for ${getDisplayLabel(cond)}`}
                           aria-valuemin={STUDY_PARAMETERS.sliderMin}
                           aria-valuemax={STUDY_PARAMETERS.sliderMax}
                           aria-valuenow={val}
@@ -419,42 +384,23 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
                           onMouseLeave={() => setHoveredThumb(null)}
                           onKeyDown={(e) => handleThumbKeyDown(e, q.id, cond, val)}
                           onClick={(e) => e.stopPropagation()}
-                          title={`#${idx + 1} ${CONDITION_META[cond].label}: ${val.toFixed(1)} / 10`}
+                          title={`#${idx + 1} ${getDisplayLabel(cond)}: ${val.toFixed(1)} / 10`}
+                          className="absolute top-1/2 flex size-7 -translate-x-1/2 items-center justify-center rounded-full font-mono text-[11px] font-semibold tabular-nums select-none touch-none"
                           style={{
-                            position: 'absolute',
                             left: `${pct}%`,
-                            top: '50%',
                             transform: `translate(-50%, calc(-50% + ${yOffset}px)) scale(${
-                              isDragging ? 1.18 : isHovered ? 1.1 : 1
+                              isDragging ? 1.12 : isHovered ? 1.06 : 1
                             })`,
-                            width: 28,
-                            height: 28,
-                            borderRadius: '50%',
-                            background:
-                              isCurrent || isDragging || isHovered
-                                ? badge.solid
-                                : 'rgba(11, 17, 32, 0.85)',
-                            border: `2.5px solid ${badge.border}`,
-                            opacity: isCurrent || isDragging || isHovered ? 1 : 0.78,
-                            boxShadow:
-                              isCurrent && !currentIsTouched
-                                ? `0 0 0 4px ${badge.tint}, 0 0 18px ${badge.glow}`
-                                : `0 4px 14px ${badge.glow}`,
+                            backgroundColor:
+                              isCurrent || isDragging || isHovered ? badge.solid : '#18181b',
+                            border: `2px solid ${badge.border}`,
                             color:
-                              isCurrent || isDragging || isHovered ? '#030712' : badge.border,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: 10.5,
-                            fontWeight: 900,
-                            fontFamily: 'var(--font-mono)',
+                              isCurrent || isDragging || isHovered ? '#09090b' : badge.border,
                             cursor: isDragging ? 'grabbing' : 'grab',
                             zIndex,
                             transition: isDragging
                               ? 'none'
-                              : 'transform 0.14s ease, opacity 0.14s ease, background 0.14s ease',
-                            userSelect: 'none',
-                            touchAction: 'none'
+                              : 'transform 0.14s ease, background-color 0.14s ease'
                           }}
                         >
                           #{idx + 1}
@@ -465,21 +411,13 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
                 </div>
 
                 {/* Endpoint Labels */}
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    fontSize: 10.5,
-                    color: 'var(--text-muted)',
-                    marginTop: 6
-                  }}
-                >
+                <div className="flex justify-between pt-1 text-xs text-muted-foreground">
                   <span>{q.lowLabel}</span>
                   <span>{q.highLabel}</span>
                 </div>
 
                 {/* Live Score & Comparative Delta Chips */}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+                <div className="flex flex-wrap gap-2 pt-0.5">
                   {completedConditions.map((cond, idx) => {
                     const badge = BUBBLE_BADGE_STYLES[idx] || BUBBLE_BADGE_STYLES[0];
                     const curVal = values[idx];
@@ -490,28 +428,16 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
                     return (
                       <div
                         key={cond}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          padding: '3px 9px',
-                          borderRadius: 6,
-                          background: 'rgba(255, 255, 255, 0.04)',
-                          border: `1px solid ${badge.tint}`,
-                          fontSize: 11,
-                          fontFamily: 'var(--font-mono)'
-                        }}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-popover px-2.5 py-1 font-mono text-[11px] tabular-nums"
                       >
-                        <span style={{ color: badge.border, fontWeight: 800 }}>
-                          #{idx + 1} {CONDITION_META[cond].shortLabel}:
+                        <span className="font-semibold" style={{ color: badge.border }}>
+                          #{idx + 1} {getDisplayLabel(cond)}:
                         </span>
-                        <span style={{ color: '#fff', fontWeight: 800 }}>{curVal.toFixed(1)}</span>
+                        <span className="font-semibold text-foreground">{curVal.toFixed(1)}</span>
                         {hasPrior && Math.abs(delta) >= 0.1 && (
                           <span
-                            style={{
-                              fontSize: 10,
-                              color: delta > 0 ? '#34d399' : '#fbbf24'
-                            }}
+                            className="text-[10px]"
+                            style={{ color: delta > 0 ? '#34d399' : '#fbbf24' }}
                           >
                             (Δ {delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)})
                           </span>
@@ -525,29 +451,41 @@ export const ProgressiveSurveyModal: React.FC<ProgressiveSurveyModalProps> = ({
           })}
         </div>
 
+        <Separator />
+
         {/* Footer */}
-        <div
-          className="modal-footer"
-          style={{
-            background: 'rgba(15, 23, 42, 0.72)',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-          }}
-        >
-          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            Tip: You can click anywhere along a scale or use Left/Right Arrow keys when a bubble is focused.
-          </span>
-          <button
-            className="btn btn-primary"
+        <div className="flex flex-col justify-between gap-3 bg-popover/60 px-6 py-4 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {showUnratedWarning && !allRated ? (
+              <>
+                <AlertCircle size={14} className="shrink-0 text-[#fbbf24]" />
+                <span className="text-[#fbbf24]">
+                  {applicableQuestions.length - ratedCount} question(s) still at default 5.0 — drag sliders or click again to confirm defaults.
+                </span>
+              </>
+            ) : (
+              <span className="font-mono tabular-nums">
+                {ratedCount}/{applicableQuestions.length} rated • Click track or drag markers
+              </span>
+            )}
+          </div>
+
+          <Button
+            type="button"
+            variant="default"
             disabled={isSubmitting}
-            onClick={() => onSubmit(scores)}
-            style={{ padding: '10px 20px', fontSize: 13 }}
+            onClick={handleSubmitClick}
+            className="h-9 px-5 text-sm font-medium"
           >
-            <CheckCircle2 size={16} />
-            {isSubmitting ? 'Saving & Syncing...' : 'Save Ratings & Continue'}
-          </button>
+            <CheckCircle2 size={15} strokeWidth={1.75} />
+            {isSubmitting
+              ? 'Saving...'
+              : confirmDefaultsArmed && !allRated
+                ? 'Confirm Defaults & Continue'
+                : 'Save Ratings & Continue'}
+          </Button>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };

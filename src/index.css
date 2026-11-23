@@ -1,64 +1,60 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700;800&display=swap');
-
 :root {
-  --bg-primary: #060911;
-  --bg-secondary: #0b101d;
-  --bg-panel: rgba(13, 19, 33, 0.82);
-  --bg-card: rgba(20, 29, 49, 0.72);
-  
-  --border-subtle: rgba(255, 255, 255, 0.09);
-  --border-active: rgba(0, 240, 255, 0.4);
-  
+  --bg-primary: #09090b;
+  --bg-secondary: #111114;
+  --bg-panel: rgba(17, 17, 20, 0.88);
+  --bg-card: rgba(24, 24, 27, 0.84);
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(56, 189, 248, 0.35);
+
   --accent-cyan: #00f0ff;
   --accent-emerald: #10b981;
   --accent-amber: #f59e0b;
   --accent-rose: #f43f5e;
   --accent-violet: #a855f7;
-  
-  --text-main: #f1f5f9;
-  --text-muted: #94a3b8;
-  --text-dim: #64748b;
 
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
-  
+  --text-main: #fafafa;
+  --text-muted: #a1a1aa;
+  --text-dim: #71717a;
+
   --glow-cyan: 0 0 20px rgba(0, 240, 255, 0.35);
   --glow-emerald: 0 0 20px rgba(16, 185, 129, 0.35);
   --glow-amber: 0 0 20px rgba(245, 158, 11, 0.35);
   --glow-rose: 0 0 25px rgba(244, 63, 94, 0.45);
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+@layer base {
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  #root {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
 }
 
-html, body {
-  height: 100%;
-  margin: 0;
-  padding: 0;
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
 }
 
-#root {
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
+@keyframes mirror-flash {
+  from { opacity: 0.78; }
+  to { opacity: 1; }
 }
 
-body {
-  background-color: var(--bg-primary);
-  background-image: 
-    radial-gradient(ellipse 65% 45% at 50% -15%, rgba(0, 240, 255, 0.13), transparent),
-    radial-gradient(ellipse 45% 35% at 50% 115%, rgba(168, 85, 247, 0.09), transparent);
-  color: var(--text-main);
-  font-family: var(--font-sans);
-  min-height: 100vh;
-  min-height: 100dvh;
-  overflow-x: hidden;
-  user-select: none;
-}
-
+@layer components {
 /* App Shell Layout */
 .app-container {
   display: flex;
@@ -156,12 +152,6 @@ body {
 
 .status-dot.pulse {
   animation: pulse-ring 1.5s infinite;
-}
-
-@keyframes pulse-ring {
-  0% { transform: scale(0.9); opacity: 0.8; }
-  50% { transform: scale(1.3); opacity: 1; }
-  100% { transform: scale(0.9); opacity: 0.8; }
 }
 
 /* 3-Column Cockpit Layout */
@@ -324,11 +314,6 @@ body {
 
 .mirror-card.gaze-focused .mirror-status {
   color: var(--accent-emerald) !important;
-}
-
-@keyframes mirror-flash {
-  from { opacity: 0.78; }
-  to { opacity: 1; }
 }
 
 /* Radar Canvas */
@@ -601,4 +586,5 @@ input[type="range"].slider::-webkit-slider-thumb {
 
 .likert-option input[type="radio"] {
   cursor: pointer;
+}
 }

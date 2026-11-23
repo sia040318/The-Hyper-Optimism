@@ -109,7 +109,7 @@ export const STUDY_PARAMETERS = {
   gazeDwellConfirmationMs: 300,
 
   /** Fallback timeout (ms) in Part 2 if webcam gaze cannot confirm before prompting fallback */
-  gazeFallbackTimeoutMs: 5000,
+  gazeFallbackTimeoutMs: 2200,
 
   /** Minimum random/jittered inter-trial interval (ms) */
   interTrialMinMs: 2200,
@@ -163,8 +163,8 @@ export const CONDITION_META: Record<StudyConditionType, ConditionMeta> = {
     label: 'Mono Non-Spatial Baseline',
     shortLabel: 'Mono',
     description: 'Single center-channel alert with no directional panning or pinna filtering.',
-    accentColor: '#94a3b8',
-    badgeBg: 'rgba(148, 163, 184, 0.18)'
+    accentColor: '#a1a1aa',
+    badgeBg: 'rgba(161, 161, 170, 0.12)'
   },
   STEREO_BASELINE: {
     id: 'STEREO_BASELINE',
@@ -172,8 +172,8 @@ export const CONDITION_META: Record<StudyConditionType, ConditionMeta> = {
     label: 'Stereo ILD Baseline',
     shortLabel: 'Stereo',
     description: 'Standard left/right equal-power panning without 3D HRTF or front-back pinna cues.',
-    accentColor: '#f59e0b',
-    badgeBg: 'rgba(245, 158, 11, 0.18)'
+    accentColor: '#fbbf24',
+    badgeBg: 'rgba(251, 191, 36, 0.12)'
   },
   SPATIAL_3D: {
     id: 'SPATIAL_3D',
@@ -181,8 +181,8 @@ export const CONDITION_META: Record<StudyConditionType, ConditionMeta> = {
     label: '3D HRTF + Pinna Spatial Audio',
     shortLabel: '3D Spatial',
     description: 'Full 3D HRTF directional audio with 4.2 kHz pinna notch and cabin early reflections.',
-    accentColor: '#00f0ff',
-    badgeBg: 'rgba(0, 240, 255, 0.18)'
+    accentColor: '#38bdf8',
+    badgeBg: 'rgba(56, 189, 248, 0.12)'
   },
   TRADITIONAL_PERSISTENT: {
     id: 'TRADITIONAL_PERSISTENT',
@@ -190,8 +190,8 @@ export const CONDITION_META: Record<StudyConditionType, ConditionMeta> = {
     label: 'Traditional Persistent Alarm',
     shortLabel: 'Traditional',
     description: 'Standard persistent alarm that keeps sounding for 3.5s even after mirror check.',
-    accentColor: '#f43f5e',
-    badgeBg: 'rgba(244, 63, 94, 0.18)'
+    accentColor: '#f87171',
+    badgeBg: 'rgba(248, 113, 113, 0.12)'
   },
   GAZE_CONTINGENT_3D: {
     id: 'GAZE_CONTINGENT_3D',
@@ -199,34 +199,47 @@ export const CONDITION_META: Record<StudyConditionType, ConditionMeta> = {
     label: 'Gaze-Contingent 3D ADAS',
     shortLabel: 'Gaze-Contingent 3D',
     description: '3D spatial warning that mutes immediately upon 300 ms mirror gaze dwell (C6→G6 earcon).',
-    accentColor: '#10b981',
-    badgeBg: 'rgba(16, 185, 129, 0.18)'
+    accentColor: '#34d399',
+    badgeBg: 'rgba(52, 211, 153, 0.12)'
   }
 };
 
 /**
- * Distinct colors for multi-bubble slider thumbs (#1, #2, #3)
+ * Neutral participant-facing condition labels to prevent demand characteristics bias
+ * during active trials and progressive ratings.
+ */
+export function getBlindedConditionLabel(part: StudyPartNumber, blockOrderOneBased: number): string {
+  if (part === 1) {
+    const labels = ['Audio Profile A', 'Audio Profile B', 'Audio Profile C'];
+    return labels[(Math.max(1, blockOrderOneBased) - 1) % labels.length];
+  }
+  const labels = ['Alert System 1', 'Alert System 2'];
+  return labels[(Math.max(1, blockOrderOneBased) - 1) % labels.length];
+}
+
+/**
+ * Distinct, restrained DESIGN.md colors for multi-bubble slider thumbs (#1, #2, #3)
  */
 export const BUBBLE_BADGE_STYLES = [
   {
     index: 1,
     solid: '#38bdf8',
-    border: '#7dd3fc',
-    glow: 'rgba(56, 189, 248, 0.55)',
-    tint: 'rgba(56, 189, 248, 0.22)'
+    border: '#38bdf8',
+    glow: 'rgba(56, 189, 248, 0.18)',
+    tint: 'rgba(56, 189, 248, 0.12)'
   },
   {
     index: 2,
-    solid: '#a855f7',
-    border: '#d8b4fe',
-    glow: 'rgba(168, 85, 247, 0.55)',
-    tint: 'rgba(168, 85, 247, 0.22)'
+    solid: '#fbbf24',
+    border: '#fbbf24',
+    glow: 'rgba(251, 191, 36, 0.18)',
+    tint: 'rgba(251, 191, 36, 0.12)'
   },
   {
     index: 3,
-    solid: '#10b981',
-    border: '#6ee7b7',
-    glow: 'rgba(16, 185, 129, 0.55)',
-    tint: 'rgba(16, 185, 129, 0.22)'
+    solid: '#34d399',
+    border: '#34d399',
+    glow: 'rgba(52, 211, 153, 0.18)',
+    tint: 'rgba(52, 211, 153, 0.12)'
   }
 ] as const;

@@ -55,7 +55,7 @@ export class SpatialAudioEngine {
   private latchedTarget: ProxyTarget | null = null;
   private latchedUntilTimestamp = 0;
 
-  constructor() {}
+  constructor() { }
 
   public async init(): Promise<boolean> {
     if (this.ctx && this.ctx.state !== 'closed') {
@@ -84,6 +84,29 @@ export class SpatialAudioEngine {
     this.createPannerNode();
 
     return true;
+  }
+
+  public async ensureReadyWithoutAmbient(): Promise<boolean> {
+    const initialized = await this.init();
+    if (!initialized) return false;
+    if (this.ctx && this.ctx.state === 'suspended') {
+      await this.ctx.resume();
+    }
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setValueAtTime(this.config.masterVolume, this.ctx.currentTime);
+    }
+    this.isAudioActive = true;
+    return true;
+  }
+
+  public setAmbientEnabled(enabled: boolean) {
+    if (enabled) {
+      if (!this.engineOsc1) {
+        this.startAmbient();
+      }
+    } else {
+      this.stopAmbient();
+    }
   }
 
   public async start(): Promise<boolean> {
@@ -192,45 +215,45 @@ export class SpatialAudioEngine {
       try {
         this.engineOsc1.stop();
         this.engineOsc1.disconnect();
-      } catch {}
+      } catch { }
       this.engineOsc1 = null;
     }
     if (this.engineOsc2) {
       try {
         this.engineOsc2.stop();
         this.engineOsc2.disconnect();
-      } catch {}
+      } catch { }
       this.engineOsc2 = null;
     }
     if (this.engineFilter) {
       try {
         this.engineFilter.disconnect();
-      } catch {}
+      } catch { }
       this.engineFilter = null;
     }
     if (this.engineGain) {
       try {
         this.engineGain.disconnect();
-      } catch {}
+      } catch { }
       this.engineGain = null;
     }
     if (this.noiseSource) {
       try {
         this.noiseSource.stop();
         this.noiseSource.disconnect();
-      } catch {}
+      } catch { }
       this.noiseSource = null;
     }
     if (this.noiseFilter) {
       try {
         this.noiseFilter.disconnect();
-      } catch {}
+      } catch { }
       this.noiseFilter = null;
     }
     if (this.noiseGain) {
       try {
         this.noiseGain.disconnect();
-      } catch {}
+      } catch { }
       this.noiseGain = null;
     }
   }
@@ -346,12 +369,12 @@ export class SpatialAudioEngine {
     if (this.panner) {
       try {
         this.panner.disconnect();
-      } catch {}
+      } catch { }
     }
     if (this.pinnaFilter) {
       try {
         this.pinnaFilter.disconnect();
-      } catch {}
+      } catch { }
     }
 
     this.panner = this.ctx.createPanner();
@@ -532,7 +555,7 @@ export class SpatialAudioEngine {
         osc.start(t + idx * 0.055);
         osc.stop(t + idx * 0.055 + 0.15);
       });
-    } catch {}
+    } catch { }
   }
 
   private startPulseScheduler(skipImmediatePulse = false) {
@@ -562,8 +585,9 @@ export class SpatialAudioEngine {
       // Compute dynamic delay based on threat distance (ISO 15006 urgency)
       let nextDelayMs = 900;
       if (this.currentThreat) {
-        if (this.studyAudioMode === 'TRADITIONAL_PERSISTENT') {
-          // Fixed traditional urgent cadence (~360ms pulse interval)
+        if (this.studyAudioMode !== null) {
+          // Hold pulse cadence constant (360ms) across ALL empirical study conditions so
+          // acoustic pulse rate never confounds spatialization or gaze cancellation.
           nextDelayMs = 360;
         } else {
           const d = Math.max(2.0, Math.min(32.0, this.currentThreat.distance));
@@ -852,16 +876,12 @@ export class SpatialAudioEngine {
     setTimeout(() => {
       try {
         stereoPanner.disconnect();
-      } catch {}
+      } catch { }
     }, 600);
   }
 
   public async triggerStudyTrialAlert(target: ProxyTarget, distanceMeters = 8.0) {
-    if (!this.isAudioActive) {
-      await this.start();
-    } else {
-      await this.init();
-    }
+    await this.ensureReadyWithoutAmbient();
     this.resetAcknowledgments();
     this.resetBeepPulseCount();
     this.isStudyTrialActive = true;

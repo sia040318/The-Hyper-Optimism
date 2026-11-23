@@ -1,0 +1,9 @@
+# AURA Drive — Cursor / Agent Frontend Rules
+
+Before creating or editing any UI component or page, ALWAYS read `DESIGN.md` first. Strictly adhere to its tokens, typography, spacing, and anti-patterns. Build one section at a time, prioritize whitespace and hierarchy, and verify both desktop and mobile layouts.
+
+## Project Context
+- Active frontend application: `The-Hyper-Optimism/` (Vite + React 19 + TypeScript + Tailwind CSS v4 + shadcn/ui).
+- Global CSS & tokens: `src/globals.css`.
+- UI primitives: `src/components/ui/*` and `cn()` helper in `src/lib/utils.ts`.
+- Strict AWS isolation: Do NOT touch, list, modify, or delete unrelated AWS resources outside `adas-gaze-audio-*`.

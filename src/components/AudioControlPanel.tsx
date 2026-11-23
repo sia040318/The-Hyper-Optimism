@@ -1,7 +1,9 @@
 import React from 'react';
 import { PanningModel, SoundType } from '../types/audio';
 import { ProxyTarget } from '../types/threats';
-import { Headphones, Sliders } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Headphones, SlidersHorizontal } from 'lucide-react';
 
 interface AudioControlPanelProps {
   isAudioActive: boolean;
@@ -27,156 +29,166 @@ export const AudioControlPanel: React.FC<AudioControlPanelProps> = ({
   onTestDirection
 }) => {
   return (
-    <div className="glass-panel">
-      <div className="panel-header">
-        <h2 className="panel-title">
-          <Headphones size={15} color="var(--accent-cyan)" />
+    <div className="flex flex-col gap-3.5 rounded-[10px] border border-border bg-card p-4">
+      <div className="flex items-center justify-between border-b border-border pb-2.5">
+        <h2 className="flex items-center gap-2 font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+          <Headphones size={14} strokeWidth={1.75} className="text-[#38bdf8]" />
           HRTF Audio Engine
         </h2>
+        <Badge
+          variant="outline"
+          className={`font-mono text-[10px] ${
+            isAudioActive
+              ? 'border-[#34d399]/35 bg-[#34d399]/10 text-[#34d399]'
+              : 'border-border text-muted-foreground'
+          }`}
+        >
+          {isAudioActive ? 'ACTIVE' : 'MUTED'}
+        </Badge>
       </div>
 
-      {/* Sound On / Off Toggle Slider Switch */}
-      <div className="slider-group" style={{ paddingBottom: 6, borderBottom: '1px solid var(--border-subtle)' }}>
-        <div className="slider-label-row" style={{ alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>Audio Output</span>
-            <span style={{ 
-              fontSize: 10, 
-              padding: '2px 6px', 
-              borderRadius: 4, 
-              background: isAudioActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.06)',
-              color: isAudioActive ? 'var(--accent-emerald)' : 'var(--text-dim)',
-              fontFamily: 'var(--font-mono)'
-            }}>
-              {isAudioActive ? 'ACTIVE' : 'MUTED'}
-            </span>
-          </div>
-
-          <button
-            onClick={onToggleAudio}
-            type="button"
-            className={`audio-toggle-switch ${isAudioActive ? 'active' : ''}`}
-            aria-label="Toggle Sound"
-            title={isAudioActive ? "Click to Turn Sound Off" : "Click to Turn Sound On"}
-            style={{
-              width: 44,
-              height: 24,
-              borderRadius: 12,
-              background: isAudioActive ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.15)',
-              border: '1px solid ' + (isAudioActive ? 'var(--accent-emerald)' : 'rgba(255, 255, 255, 0.2)'),
-              position: 'relative',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              padding: 2,
-              display: 'flex',
-              alignItems: 'center'
-            }}
-          >
-            <div
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: '50%',
-                background: '#ffffff',
-                boxShadow: '0 2px 4px rgba(0, 0, 0, 0.4)',
-                transform: isAudioActive ? 'translateX(20px)' : 'translateX(0px)',
-                transition: 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
-              }}
-            />
-          </button>
-        </div>
+      {/* Sound On / Off Switch */}
+      <div className="flex items-center justify-between border-b border-border pb-3">
+        <span className="text-xs font-medium text-foreground">Spatial Audio Output</span>
+        <button
+          onClick={onToggleAudio}
+          type="button"
+          aria-label="Toggle Sound"
+          className={`relative flex h-6 w-11 cursor-pointer items-center rounded-full border p-0.5 transition-colors ${
+            isAudioActive
+              ? 'border-[#34d399]/60 bg-[#34d399]/25'
+              : 'border-border bg-secondary'
+          }`}
+        >
+          <span
+            className={`size-4 rounded-full transition-transform ${
+              isAudioActive ? 'translate-x-5 bg-[#34d399]' : 'translate-x-0 bg-[#a1a1aa]'
+            }`}
+          />
+        </button>
       </div>
 
-      {/* Volume Slider */}
-      <div className="slider-group">
-        <div className="slider-label-row">
-          <span>Master Volume</span>
-          <span style={{ fontFamily: 'var(--font-mono)' }}>{Math.round(volume * 100)}%</span>
+      {/* Master Volume */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">Master Volume</span>
+          <span className="font-mono font-medium tabular-nums text-foreground">
+            {Math.round(volume * 100)}%
+          </span>
         </div>
         <input
           type="range"
-          className="slider"
           min="0"
           max="100"
           value={Math.round(volume * 100)}
           onChange={(e) => onVolumeChange(parseFloat(e.target.value) / 100)}
+          className="h-1.5 w-full cursor-pointer accent-[#38bdf8]"
         />
       </div>
 
-      {/* Spatial Panning Model (HRTF vs Stereo) */}
-      <div className="slider-group">
-        <div className="slider-label-row">
-          <span>Spatial Panning Engine</span>
-        </div>
-        <div className="segmented-control">
+      {/* Panning Model */}
+      <div className="space-y-1.5">
+        <div className="text-xs text-muted-foreground">Spatial Panning Engine</div>
+        <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background p-0.5">
           <button
-            className={`segment-btn ${panningModel === 'HRTF' ? 'active' : ''}`}
+            type="button"
             onClick={() => onPanningChange('HRTF')}
+            className={`rounded-[4px] px-2 py-1.5 text-[11px] font-medium transition-colors ${
+              panningModel === 'HRTF'
+                ? 'bg-secondary text-[#38bdf8]'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
           >
-            3D HRTF (Binaural)
+            3D HRTF
           </button>
           <button
-            className={`segment-btn ${panningModel === 'equalpower' ? 'active' : ''}`}
+            type="button"
             onClick={() => onPanningChange('equalpower')}
+            className={`rounded-[4px] px-2 py-1.5 text-[11px] font-medium transition-colors ${
+              panningModel === 'equalpower'
+                ? 'bg-secondary text-[#38bdf8]'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
           >
-            Stereo Baseline
+            Stereo ILD
           </button>
         </div>
       </div>
 
-      {/* Sound Waveform */}
-      <div className="slider-group">
-        <div className="slider-label-row">
-          <span>Acoustic Waveform</span>
-        </div>
-        <div className="segmented-control">
-          <button
-            className={`segment-btn ${soundType === 'chime' ? 'active' : ''}`}
-            onClick={() => onSoundTypeChange('chime')}
-          >
-            Harmonic Chime
-          </button>
-          <button
-            className={`segment-btn ${soundType === 'click_train' ? 'active' : ''}`}
-            onClick={() => onSoundTypeChange('click_train')}
-          >
-            Click Train
-          </button>
-          <button
-            className={`segment-btn ${soundType === 'sine' ? 'active' : ''}`}
-            onClick={() => onSoundTypeChange('sine')}
-          >
-            Pure Sine
-          </button>
+      {/* Waveform */}
+      <div className="space-y-1.5">
+        <div className="text-xs text-muted-foreground">Acoustic Waveform</div>
+        <div className="grid grid-cols-3 gap-1 rounded-md border border-border bg-background p-0.5">
+          {[
+            { id: 'chime' as const, label: 'Chime' },
+            { id: 'click_train' as const, label: 'Clicks' },
+            { id: 'sine' as const, label: 'Sine' }
+          ].map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              onClick={() => onSoundTypeChange(w.id)}
+              className={`rounded-[4px] px-2 py-1.5 text-[11px] font-medium transition-colors ${
+                soundType === w.id
+                  ? 'bg-secondary text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {w.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Instant Direction Tests */}
-      <div className="panel-header" style={{ marginTop: 4 }}>
-        <h2 className="panel-title">
-          <Sliders size={14} color="var(--accent-amber)" />
+      {/* Instant Direction Cues */}
+      <div className="space-y-2 border-t border-border pt-3">
+        <div className="flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+          <SlidersHorizontal size={13} strokeWidth={1.75} className="text-[#fbbf24]" />
           Instant Direction Cues
-        </h2>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => onTestDirection('LEFT_MIRROR')}
+            className="h-7 font-mono text-[11px]"
+          >
+            Left (-90°)
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => onTestDirection('RIGHT_MIRROR')}
+            className="h-7 font-mono text-[11px]"
+          >
+            Right (+90°)
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => onTestDirection('REAR_MIRROR')}
+            className="h-7 font-mono text-[11px]"
+          >
+            Rear (180°)
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            onClick={() => onTestDirection('FRONT_WINDSHIELD')}
+            className="h-7 font-mono text-[11px]"
+          >
+            Front (0°)
+          </Button>
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-        <button className="btn" onClick={() => onTestDirection('LEFT_MIRROR')}>
-          Left Mirror (-90°)
-        </button>
-        <button className="btn" onClick={() => onTestDirection('RIGHT_MIRROR')}>
-          Right Mirror (+90°)
-        </button>
-        <button className="btn" onClick={() => onTestDirection('REAR_MIRROR')}>
-          Rear Mirror (180°)
-        </button>
-        <button className="btn" onClick={() => onTestDirection('FRONT_WINDSHIELD')}>
-          Front (0°)
-        </button>
-      </div>
-
-      <div style={{ marginTop: 'auto', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center' }}>
-        🎧 Stereo headphones required for accurate HRTF pinna & ITD cues.
-      </div>
+      <p className="pt-1 text-center text-[11px] text-[#71717a]">
+        Stereo headphones recommended for HRTF pinna cues.
+      </p>
     </div>
   );
 };
